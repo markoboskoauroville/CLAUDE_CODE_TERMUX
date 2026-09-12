@@ -169,6 +169,48 @@ install_command probe "#!/bin/bash
 echo probe-2"
 assert_eq "writing the same body twice is harmless" "probe-2" "$(bash "$BIN_DIR/probe")"
 
+# ----------------------------------------------------------- add_alias -----
+RC="$WORK/rc"
+# the case it is FOR
+printf 'export PATH=/usr/bin\n' > "$RC"
+assert_eq "an alias is added to a normal rc" "added" "$(add_alias "$RC" c claude)"
+assert_contains "and the line is there"  "alias c='claude'" "$(cat "$RC")"
+assert_contains "and the old content survives" "export PATH=/usr/bin" "$(cat "$RC")"
+# the same input twice
+assert_eq "adding it again reports already" "already" "$(add_alias "$RC" c claude)"
+assert_eq "and the line appears exactly once" "1" "$(grep -c "^alias c='claude'$" "$RC")"
+# the case it must REFUSE: c already means something else
+printf 'alias c=cargo\n' > "$RC"
+assert_eq "an existing different alias is a conflict" "conflict" "$(add_alias "$RC" c claude)"
+assert_eq "and the person's own alias is untouched" "alias c=cargo" "$(cat "$RC")"
+# boundary: a file whose last line has no newline
+printf 'export FOO=1' > "$RC"
+add_alias "$RC" c claude >/dev/null
+assert_eq "a file with no trailing newline does not swallow the alias" "1" \
+  "$(grep -c "^alias c='claude'$" "$RC")"
+assert_contains "and its last line is still intact" "export FOO=1" "$(head -1 "$RC")"
+# boundary: empty file, and a file that does not exist yet
+: > "$RC"
+assert_eq "an empty rc takes the alias" "added" "$(add_alias "$RC" c claude)"
+rm -f "$RC"
+assert_eq "a missing rc is created" "added" "$(add_alias "$RC" c claude)"
+# ABSENT: a read-only rc must fail rather than half-write. Root bypasses file
+# permissions, so this case is only reachable as an ordinary user, which is
+# what Termux runs as on a phone.
+printf 'export PATH=/usr/bin\n' > "$RC"; chmod 444 "$RC"
+if [ "$(id -u)" -eq 0 ]; then
+  skip "a read-only rc reports failed" "running as root, which can write to it anyway"
+else
+  assert_eq "a read-only rc reports failed" "failed" "$(add_alias "$RC" c claude)"
+  assert_not_contains "and nothing was written to it" "alias c=" "$(cat "$RC")"
+fi
+chmod 644 "$RC"
+
+# shell_rc picks the file the person's shell actually reads
+assert_eq "zsh users get .zshrc" "$HOME/.zshrc" "$(SHELL=/usr/bin/zsh shell_rc)"
+assert_eq "bash users get .bashrc" "$HOME/.bashrc" "$(SHELL=/bin/bash shell_rc)"
+assert_eq "an unknown shell falls back to .bashrc" "$HOME/.bashrc" "$(SHELL=/bin/dash shell_rc)"
+
 # ------------------------------------------------------------ draw_bar -----
 TTY=0
 assert_contains "0 of 100 draws an empty bar"  "[......................]" "$(draw_bar 0 100 x)"
