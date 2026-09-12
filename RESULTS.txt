@@ -1,0 +1,177 @@
+
+CLAUDE_CODE_TERMUX — the four tests
+installer: /home/claude/CLAUDE_CODE_TERMUX/install.sh
+
+TEST 1 — THE MECHANISM, ALONE
+------------------------------------------------------------------
+  pass  install.sh parses
+  pass  uninstall.sh parses
+  pass  tests/run_tests.sh parses
+  pass  gates/run_gates.sh parses
+  pass  installer carries its completeness marker on the last line
+  pass  the marker is genuinely the last line
+  pass  the marker check goes red on a truncated file (it can fail)
+  pass  python parser returns a 64-hex checksum from the live manifest
+  skip  jq not available here
+  pass  the no-python fallback parser agrees with python
+  pass  the generated claude launcher parses
+  pass  the generated updater parses
+
+TEST 2 — A FULL INSTALL, END TO END
+------------------------------------------------------------------
+  pass  installer exits 0 (exit was 0)
+  pass  claude launcher exists and is executable
+  pass  claude-termux-update exists
+  pass  current symlink points at a build
+  pass  claude --version prints the installed version
+  pass  launcher disables the built-in updater (it would unpatch the binary)
+  pass  launcher uses Termux ripgrep
+  pass  launcher gives Claude Code a writable TMPDIR (Android has no /tmp)
+  pass  launcher supplies the glibc library path at runtime
+  pass  dependency table printed a count, not an adjective
+  pass  every step announced itself with a step number
+  pass  per-item ok lines printed
+  pass  patchelf was called on the downloaded binary
+  pass  patchelf was pointed at the Termux glibc linker
+
+TEST 3 — THE UGLY CASES
+------------------------------------------------------------------
+  pass  checksum mismatch: installer stops (exit 1)
+  pass  checksum mismatch: nothing written to bin
+  pass  checksum mismatch: says so in plain words
+  pass  checksum mismatch: no partial build left in opt
+  pass  CDN returns HTML: installer stops
+  pass  CDN returns HTML: nothing installed
+  pass  no network: installer stops at the table, before any package work
+  pass  no network: names the cause
+  pass  armv7l: installer refuses
+  pass  armv7l: explains why
+  pass  download fails: installer stops
+  pass  download fails: no half-installed launcher
+  pass  patchelf lies: installer catches it by reading the interpreter back
+  pass  patchelf lies: nothing installed
+  pass  truncated installer: installs nothing (the wrap-and-call-last rule)
+  pass  apt fails: installer stops rather than limping on
+  pass  apt fails: the failure is printed, not swallowed
+  pass  rollback with no history: refuses instead of breaking the install
+
+TEST 4 — THE UPGRADE, AND THE WAY BACK
+------------------------------------------------------------------
+  pass  old version installs
+  pass  old version runs: 2.1.269 (Claude Code)
+  pass  update exits 0
+  pass  the new version is what runs now: 2.1.300 (Claude Code)
+  pass  the home directory (and ~/.claude with it) is untouched by an update
+  pass  the previous build is recorded for rollback
+  pass  rollback exits 0
+  pass  rollback really goes back: 2.1.269 (Claude Code)
+  pass  builds kept on disk: 2 (limit 2)
+  pass  the updater checks the new installer is complete before running it
+  pass  the updater checks the new installer parses before running it
+
+WHAT WAS NOT TESTED
+------------------------------------------------------------------
+  Off a phone, these cannot be checked and are not claimed:
+    - that the real 230 MB glibc binary starts once its interpreter is repointed
+    - that glibc-runner installs from tur-repo on a given Android version
+    - proot-distro installing a real Ubuntu rootfs
+    - the OAuth login round trip through the Android browser
+    - Android's low-memory killer during a long download
+    - real download time and battery cost on mobile data
+  Everything above is stubbed. The logic around them is what these tests cover.
+
+RESULT
+------------------------------------------------------------------
+  checks run  55
+  passed      54
+  failed      0
+  skipped     1
+
+
+
+G1  PROVENANCE — is this the artefact I think it is
+------------------------------------------------------------------
+  artefacts declared: 8   present: 8   missing: 0
+  ok    version 2 (whole number)
+  ok    README names v2
+  ok    DELIVERY.md names v2
+  ok    completeness marker is the last line of install.sh
+  adv   remote comparison skipped — rerun with --remote after pushing (versioning.md: never say pushed on the strength of the command having run)
+
+G2  SECRETS — does it carry anything that must never leave
+------------------------------------------------------------------
+  ok    the supplied GitHub token appears in no artefact
+  ok    the secret pattern matches a known-bad string (the check can fail)
+  ok    .gitignore excludes token files
+  files scanned: 8   pattern hits: 0   bare-40-hex hits: 0
+  ok    no secret-shaped strings in any artefact
+
+G3  ANALYSIS — what do the machines say, warnings all the way up
+------------------------------------------------------------------
+  ok    install.sh: clean at warning and above
+  ok    uninstall.sh: clean at warning and above
+  ok    tests/run_tests.sh: clean at warning and above
+  ok    gates/run_gates.sh: clean at warning and above
+  files analysed: 4   blocking findings: 0   style-level findings: 21
+  adv   21 style-level findings (not blocking)
+  scripts parsed: 4   failed to parse: 0
+
+G4  DEAD CODE — what is in there that nothing reaches
+------------------------------------------------------------------
+  functions defined: 42   never called: 0
+  ok    every function defined is reached by something
+
+G5  DEAD LOOPS — what can spin, hang or wait forever
+------------------------------------------------------------------
+  curl invocations found: 8   without any time bound: 0
+  ok    every network call is bounded
+  ok    no 'while true' in any shipped script
+  ok    the progress loop ends with the process it watches, not on a timer
+  ok    the only interactive read is guarded by a terminal check — a piped install never blocks
+  ok    traps are armed for EXIT, INT and TERM before the first terminal write
+
+G6  STRESS — what happens when the world misbehaves, repeatedly
+------------------------------------------------------------------
+  full test suite runs: 3   green: 3   red: 0   first run: 9s
+  ok    the suite is repeatable — same result 3 times
+  checks per run: 55
+  sabotage switches wired into the harness: 12 (network down, HTML instead of JSON, corrupt checksum, apt failure, download failure, lying patchelf, 32-bit arch, truncated installer)
+  ok    the world is made to misbehave in at least 7 distinct ways
+
+G7  BUDGETS — is anything worse than last time
+------------------------------------------------------------------
+  install.sh: 22690 bytes, 580 lines
+  ok    installer under the 40 KB budget (a phone downloads it before anything else)
+  test suite wall time: 9s (measured in G6, not run again)
+  ok    suite under the 2 minute budget
+  distinct Termux packages the installer can install: 16
+  ok    dependency count within budget
+  repository size: 112 KB
+  ok    repository under 5 MB — nothing here regenerates or belongs on Drive
+
+G8  UPGRADE — the person who already had the old one, and the way back
+------------------------------------------------------------------
+  Test 4 checks: 11   passed: 11   failed: 0
+  ok    upgrade from the previous build, with settings kept
+  ok    a rollback clause exists (--rollback)
+  ok    the previous build is recorded before the new one becomes current
+  ok    the built-in updater is disabled so it cannot unpatch the binary behind the person's back
+
+G9  THE RECORD — what is being claimed, and what is not
+------------------------------------------------------------------
+  ok    DELIVERY.md exists
+  ok    DELIVERY.md has a 'WHAT WAS TESTED' section
+  ok    DELIVERY.md has a 'WHAT WAS NOT TESTED' section
+  ok    DELIVERY.md has a 'KNOWN LIMITS' section
+  ok    the record says plainly that the native path is a shim, not official Android support
+  ok    the README also carries the off-phone caveat
+
+RESULT
+------------------------------------------------------------------
+  gates run   9
+  green       9
+  blocked     0
+  advisory    2
+
+  all blocking gates green — this may be delivered
+
