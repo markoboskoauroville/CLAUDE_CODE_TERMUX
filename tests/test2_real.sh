@@ -130,6 +130,25 @@ if printf '%s\n' "$LAUNCHER" | grep -qE '^[^#]*export[[:space:]]+LD_LIBRARY_PATH
 else
   pass "the launcher does not export LD_LIBRARY_PATH"
 fi
+# MEASURED ON A PHONE, 12.9.2026, with LD_DEBUG=libs. Termux puts
+# libtermux-exec-ld-preload.so on LD_PRELOAD in every shell. It is a Bionic
+# object needing libc.so; glibc's loader honours the preload, searches the
+# glibc directory for libc.so, finds a text linker script and stops with
+# "invalid ELF header". The launcher must clear the preload for its own
+# process. This check can fail on its own: remove the unset and it goes red.
+if printf '%s\n' "$LAUNCHER" | grep -qE '^[[:space:]]*unset[[:space:]]+LD_PRELOAD'; then
+  pass "the launcher clears the Termux preload before exec"
+else
+  fail "the launcher clears the Termux preload before exec" \
+       "without it, glibc resolves the preload's libc.so against the linker script"
+fi
+PRELOAD_LINE=$(printf '%s\n' "$LAUNCHER" | grep -nE '^[[:space:]]*unset[[:space:]]+LD_PRELOAD' | cut -d: -f1 | head -1)
+EXEC_LINE=$(printf '%s\n' "$LAUNCHER" | grep -n '^exec ' | cut -d: -f1 | head -1)
+if [ -n "$PRELOAD_LINE" ] && [ -n "$EXEC_LINE" ] && [ "$PRELOAD_LINE" -lt "$EXEC_LINE" ]; then
+  pass "and it clears it before the exec, not after"
+else
+  fail "and it clears it before the exec" "unset at line ${PRELOAD_LINE:-none}, exec at line ${EXEC_LINE:-none}"
+fi
 assert_contains "the launcher gives Android a TMPDIR" "TMPDIR"               "$LAUNCHER"
 assert_contains "the launcher uses Termux ripgrep"    "USE_BUILTIN_RIPGREP=0" "$LAUNCHER"
 assert_contains "the launcher disables the autoupdater" "DISABLE_AUTOUPDATER=1" "$LAUNCHER"
