@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #
 # CLAUDE_CODE_TERMUX — Claude Code on Android, through Termux.
-# edition: v6
+# edition: v7
 #
 #   curl -fsSL https://raw.githubusercontent.com/markoboskoauroville/CLAUDE_CODE_TERMUX/main/install.sh | bash
 #
@@ -11,6 +11,7 @@
 #   --update      re-fetch and re-install
 #   --extras      also install node, python, openssh
 #   --yes         take every default, ask nothing
+#   --no-alias    skip the one-letter shortcut
 #
 # Anthropic ships Claude Code as one glibc-linked binary. The CDN carries
 # darwin, linux and win32 builds; there is no android-arm64. Android runs on
@@ -19,7 +20,7 @@
 
 set -uo pipefail
 
-CCT_EDITION=6
+CCT_EDITION=7
 CCT_REPO="markoboskoauroville/CLAUDE_CODE_TERMUX"
 # These three are overridable so a fork, a mirror, or a test harness can point
 # them elsewhere. The defaults are the real ones.
@@ -31,8 +32,8 @@ BIN_DIR="$PREFIX/bin"
 OPT_DIR="$PREFIX/opt/claude-code"
 DISTRO="ubuntu"
 
-MODE=""; UPDATE=0; EXTRAS=0; ASSUME_YES=0
-STEP=0; STEPS=9
+MODE=""; UPDATE=0; EXTRAS=0; ASSUME_YES=0; WANT_ALIAS=1
+STEP=0; STEPS=10
 T_START=$(date +%s)
 
 # Every wait on something outside this process carries a deadline.
@@ -181,6 +182,36 @@ validate_installer() {
   tail -2 "$f" | grep -q "$CCT_SENTINEL" || { echo "sentinel missing, the file is truncated"; return 1; }
   tail -2 "$f" | grep -q '^# CCT_COMPLETE_V2$' || { echo "the edition-2 compatibility marker is missing"; return 1; }
   echo "size $size, shebang ok, parse silent, sentinel present"
+  return 0
+}
+
+# Which start-up file the person's shell actually reads.
+shell_rc() {
+  case "${SHELL##*/}" in
+    zsh) printf '%s\n' "$HOME/.zshrc" ;;
+    *)   printf '%s\n' "$HOME/.bashrc" ;;
+  esac
+}
+
+# Appends one alias line to a shell start-up file. Never rewrites the file:
+# somebody's rc is their own work and a wholesale rewrite is how it gets lost.
+# Prints what it did: added, already, conflict, or failed.
+add_alias() {
+  local rc="$1" name="$2" cmd="$3"
+  local line="alias $name='$cmd'"
+  [ -e "$rc" ] || : > "$rc" 2>/dev/null || { echo "failed"; return 1; }
+  [ -w "$rc" ] || { echo "failed"; return 1; }
+  if grep -q "^alias $name=" "$rc" 2>/dev/null; then
+    if grep -qxF "$line" "$rc"; then echo "already"; return 0; fi
+    echo "conflict"; return 2
+  fi
+  # A file whose last line has no newline would otherwise swallow the alias
+  # onto the end of it. Command substitution strips trailing newlines, so a
+  # non-empty result here means the last character was not one.
+  if [ -s "$rc" ] && [ -n "$(tail -c1 "$rc")" ]; then printf '\n' >> "$rc" || { echo "failed"; return 1; }; fi
+  printf '# added by CLAUDE_CODE_TERMUX: start Claude Code with one letter\n%s\n' "$line" >> "$rc" \
+    || { echo "failed"; return 1; }
+  echo "added"
   return 0
 }
 
@@ -560,6 +591,45 @@ UPDATER
 )"
 }
 
+# ============================================================ the shortcut ===
+# Editing somebody's shell start-up file is not something an installer should
+# do quietly. Interactively it asks. Piped from curl there is no terminal to
+# ask on, so it says plainly what it added and how to take it away again.
+setup_alias() {
+  step "The one-letter shortcut"
+  if [ "$WANT_ALIAS" != "1" ]; then
+    note "skipped, because --no-alias was given"
+    return 0
+  fi
+  local rc; rc="$(shell_rc)"
+  info "your shell reads $rc"
+
+  if [ -t 0 ] && [ "$ASSUME_YES" != "1" ]; then
+    local reply
+    read -r -p "        Add  alias c='claude'  to $rc? [Y/n]: " reply || reply="y"
+    case "${reply:-y}" in
+      n|N|no|NO) note "left alone; add it yourself any time with: echo \"alias c='claude'\" >> $rc"; return 0 ;;
+    esac
+  fi
+
+  local result; result="$(add_alias "$rc" c claude)"
+  case "$result" in
+    added)
+      ok "added  alias c='claude'  to $rc"
+      info "type  c  instead of  claude  in any new session"
+      info "to remove it later:  sed -i \"/alias c='claude'/d\" $rc" ;;
+    already)
+      ok "$rc already has it, nothing to change" ;;
+    conflict)
+      bad "$rc already defines c as something else, so it was left alone"
+      note "run  alias c  to see what it points at" ;;
+    *)
+      bad "could not write to $rc, so no shortcut was added"
+      note "everything else is installed and working" ;;
+  esac
+  return 0
+}
+
 # ================================================================= verify ===
 verify() {
   step "Verifying"
@@ -593,6 +663,7 @@ parse_args() {
       --update) UPDATE=1 ;;
       --extras) EXTRAS=1 ;;
       --yes|-y) ASSUME_YES=1 ;;
+      --no-alias) WANT_ALIAS=0 ;;
       -h|--help) usage; exit 0 ;;
       *) die "not an option: $a  (try --help)" ;;
     esac
@@ -612,11 +683,12 @@ main() {
     native) install_native ;;
     proot)  install_proot ;;
   esac
+  setup_alias
   verify; local vrc=$?
 
   printf '\n%s Finished in %s seconds.%s\n\n' "$AMBER" "$(elapsed)" "$OFF"
   cat <<EOF
-        Start it:            claude
+        Start it:            claude      (or just  c  in a new session)
         Update it later:     claude-termux-update
         Remove it:           bash uninstall.sh
 
@@ -637,5 +709,5 @@ EOF
 if [ "${CCT_SOURCE_ONLY:-0}" != "1" ]; then
   main "$@"
 fi
-# CLAUDE_CODE_TERMUX_COMPLETE_MARKER edition v6 — a truncated copy cannot carry this line
+# CLAUDE_CODE_TERMUX_COMPLETE_MARKER edition v7 — a truncated copy cannot carry this line
 # CCT_COMPLETE_V2
