@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #
 # CLAUDE_CODE_TERMUX — Claude Code on Android, through Termux.
-# edition: v7
+# edition: v8
 #
 #   curl -fsSL https://raw.githubusercontent.com/markoboskoauroville/CLAUDE_CODE_TERMUX/main/install.sh | bash
 #
@@ -20,7 +20,7 @@
 
 set -uo pipefail
 
-CCT_EDITION=7
+CCT_EDITION=8
 CCT_REPO="markoboskoauroville/CLAUDE_CODE_TERMUX"
 # These three are overridable so a fork, a mirror, or a test harness can point
 # them elsewhere. The defaults are the real ones.
@@ -483,17 +483,40 @@ WRAPPER
 }
 
 # ========================================================== proot install ===
+# Is the rootfs actually on disk? proot-distro's own listing command changes
+# between versions; the directory does not.
+distro_present() {
+  [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO" ] && return 0
+  proot-distro list --installed 2>/dev/null | grep -q "$DISTRO" && return 0
+  return 1
+}
+
+
 install_proot() {
   step "Installing proot-distro"
   pkg_add proot-distro || die "proot-distro would not install"
 
   step "Unpacking the $DISTRO rootfs"
-  if proot-distro list --installed 2>/dev/null | grep -q "$DISTRO"; then
-    ok "$DISTRO is already here"
+  # MEASURED on a phone, 12.9.2026, proot-distro 5.8.0: "list --installed" is
+  # not a reliable way to ask this. The rootfs directory on disk is the fact;
+  # the command's output is an opinion about it that varies by version.
+  if distro_present; then
+    ok "$DISTRO is already here, nothing to unpack"
   else
     info "a few hundred MB to fetch, then it unpacks, and the unpack is quiet for a while"
-    run "proot-distro install $DISTRO" proot-distro install "$DISTRO" \
-      || die "the $DISTRO rootfs did not install"
+    local out rc
+    out="$(proot-distro install "$DISTRO" 2>&1)"; rc=$?
+    printf '%s\n' "$out" | while IFS= read -r l; do printf '        %s| %s%s\n' "$DIM" "$l" "$OFF"; done
+    if [ "$rc" -ne 0 ]; then
+      # An install that fails BECAUSE it is already installed is not a failure.
+      if printf '%s' "$out" | grep -q 'already exists' || distro_present; then
+        ok "$DISTRO was already installed"
+      else
+        die "the $DISTRO rootfs did not install"
+      fi
+    else
+      ok "$DISTRO unpacked"
+    fi
   fi
 
   step "Installing Claude Code inside $DISTRO"
@@ -709,5 +732,5 @@ EOF
 if [ "${CCT_SOURCE_ONLY:-0}" != "1" ]; then
   main "$@"
 fi
-# CLAUDE_CODE_TERMUX_COMPLETE_MARKER edition v7 — a truncated copy cannot carry this line
+# CLAUDE_CODE_TERMUX_COMPLETE_MARKER edition v8 — a truncated copy cannot carry this line
 # CCT_COMPLETE_V2
