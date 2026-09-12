@@ -1,16 +1,25 @@
-# CLAUDE_CODE_TERMUX
+# CLAUDE_CODE_TERMUX v2
 
-Install Claude Code on an Android phone through Termux, with one command.
+Install Claude Code on an Android phone through Termux.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/markoboskoauroville/CLAUDE_CODE_TERMUX/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/markoboskoauroville/CLAUDE_CODE_TERMUX/main/install.sh -o cct.sh
+bash cct.sh
 ```
 
-Then just:
+Then:
 
 ```bash
 claude
 ```
+
+Download first, run second. Piping an installer straight into bash means a
+truncated download runs anyway; this one is written so that a truncated copy
+does nothing at all, but downloading it first also lets you read it.
+
+The installer prints a dependency table before it touches anything, numbers
+every step, and shows a progress bar during the long silent stretches — apt,
+the glibc layer, the 230 MB download, and proot.
 
 ---
 
@@ -35,13 +44,15 @@ This installer gives you two ways around that.
 | Files live in | Termux home, directly | Termux home, shared into Ubuntu |
 | Fragility | a compatibility shim — an upstream change can break it | behaves like Claude Code on any Linux machine |
 
-Run with no flags and the script asks which one you want. If you are piping from `curl` (no interactive terminal) it defaults to `--native`.
+Run with no flags and the script asks which one you want. Piped from `curl`, with no terminal to ask at, it defaults to `--native` and says so.
 
 ```bash
-bash install.sh --native      # light
-bash install.sh --proot       # sturdy
-bash install.sh --extras      # also install node, python, openssh, jq
-bash install.sh --native --update
+bash cct.sh --native      # light
+bash cct.sh --proot       # sturdy
+bash cct.sh --extras      # also install node, python, openssh, jq
+bash cct.sh --native --update
+bash cct.sh --rollback    # go back to the previous build
+bash cct.sh --quiet       # fewer lines, progress bars stay
 ```
 
 ## What the script actually does
@@ -63,7 +74,7 @@ bash install.sh --native --update
 2. Runs Anthropic's official `install.sh` inside it.
 3. Writes `$PREFIX/bin/claude`, which drops into Ubuntu with your Termux home mounted and runs `claude` there.
 
-Both paths also install `claude-termux-update`.
+Both paths also install `claude-termux-update`. It downloads the installer to a file, checks it parses **and** that it carries its end-of-file marker, and only then runs it — a truncated installer parses perfectly and installs half an app.
 
 ## Updating
 
@@ -100,6 +111,25 @@ Removes the launchers and the patched binary. Add `--all` to also delete `~/.cla
 **PDF reading fails** — `pkg install poppler` and make sure `which` is installed.
 
 **`armv7l` or `armv8l` from `uname -m`** — your phone runs a 32-bit Android userland on 64-bit hardware. Neither path will work.
+
+## What was tested, and what was not
+
+```bash
+bash tests/run_tests.sh      # the four tests
+bash gates/run_gates.sh      # the nine delivery gates
+```
+
+These run off the phone against a stubbed Termux: fake CDN, fake packages, fake
+patchelf, a fake claude binary. That covers the logic — every failure path,
+the upgrade, the rollback — and it cannot cover the phone.
+
+**Not tested, and not claimed:** that the real 230 MB glibc binary starts once
+its interpreter is repointed; that `glibc-runner` installs cleanly from
+`tur-repo` on your Android version; a real `proot-distro` Ubuntu install; the
+OAuth login round trip through the Android browser; Android's low-memory killer
+during a long download; real time and battery on mobile data.
+
+Full record in [DELIVERY.md](DELIVERY.md).
 
 ## Security note
 
