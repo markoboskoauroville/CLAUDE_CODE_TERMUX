@@ -267,4 +267,50 @@ bash "$PREFIX/bin/claude-termux-update" > "$WORK/upd.log" 2>&1
 assert_contains "a whole installer passes all four checks" "sentinel present" "$(cat "$WORK/upd.log")"
 assert_contains "and the updater then actually installs" "installing, mode native" "$(cat "$WORK/upd.log")"
 
+# ============================= PROOT: THE DISTRO IS ALREADY INSTALLED =======
+# MEASURED on a phone, 12.9.2026. proot-distro 5.8.0 did not report the
+# installed rootfs through "list --installed", so the installer tried a fresh
+# install, got "Error: container 'ubuntu' already exists", and stopped. A
+# working Ubuntu was sitting right there.
+fresh_env
+PD="$STUBS/proot-distro"
+cat > "$PD" <<'S'
+#!/bin/bash
+case "$1" in
+  list)    exit 0 ;;                      # says nothing, like 5.8.0
+  install) echo "Error: container 'ubuntu' already exists. Specify a different name with '--name NAME'." >&2; exit 1 ;;
+  login)   exit 0 ;;
+esac
+exit 0
+S
+chmod +x "$PD"
+mkdir -p "$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"
+bash "$HERE/../install.sh" --proot --yes >"$WORK/proot.log" 2>&1
+# The sandbox has no $PREFIX/bin/bash, so the final verify cannot succeed here
+# and the exit code says nothing. What matters is that the run got PAST the
+# rootfs step instead of stopping on it.
+assert_not_contains "an already-installed rootfs does not stop the install" \
+  "rootfs did not install" "$(cat "$WORK/proot.log")"
+assert_contains "and it says the rootfs is already there" "already here" "$(cat "$WORK/proot.log")"
+assert_contains "and it carried on to write the commands" "Writing the commands" "$(cat "$WORK/proot.log")"
+assert_ok "the launcher was written" test -x "$PREFIX/bin/claude"
+
+# and when the listing is silent AND the directory is missing, a real failure
+# must still stop it
+fresh_env
+rm -rf "$PREFIX/var/lib/proot-distro"
+cat > "$STUBS/proot-distro" <<'S'
+#!/bin/bash
+case "$1" in
+  list)    exit 0 ;;
+  install) echo "Error: failed to download rootfs tarball" >&2; exit 1 ;;
+esac
+exit 0
+S
+chmod +x "$STUBS/proot-distro"
+bash "$HERE/../install.sh" --proot --yes >"$WORK/proot2.log" 2>&1
+assert_eq "a genuine rootfs failure still stops the install" "1" "$?"
+assert_contains "and says which step failed" "rootfs did not install" "$(cat "$WORK/proot2.log")"
+rm -f "$STUBS/proot-distro"
+
 t_summary "TEST 3"
