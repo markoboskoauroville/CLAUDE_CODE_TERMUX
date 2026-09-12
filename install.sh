@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #
 # CLAUDE_CODE_TERMUX — Claude Code on Android, through Termux.
-# edition: v4
+# edition: v5
 #
 #   curl -fsSL https://raw.githubusercontent.com/markoboskoauroville/CLAUDE_CODE_TERMUX/main/install.sh | bash
 #
@@ -19,7 +19,7 @@
 
 set -uo pipefail
 
-CCT_EDITION=4
+CCT_EDITION=5
 CCT_REPO="markoboskoauroville/CLAUDE_CODE_TERMUX"
 # These three are overridable so a fork, a mirror, or a test harness can point
 # them elsewhere. The defaults are the real ones.
@@ -423,11 +423,20 @@ write_launcher_native() {
 #!$PREFIX/bin/bash
 # Claude Code launcher for Termux. CLAUDE_CODE_TERMUX edition v$CCT_EDITION.
 #
-# LD_LIBRARY_PATH is deliberately NOT set here. The glibc directory holds a
-# file called libc.so, which is a text linker script, and Android's own libc
-# is also called libc.so. Any Termux command run with that directory on the
-# library path loads the script and dies with "bad ELF magic: 2f2a2047".
-# The binary carries its own rpath instead, written in by the installer.
+# Termux exports LD_PRELOAD=$PREFIX/lib/libtermux-exec-ld-preload.so into every
+# shell. That library is a Bionic object and needs Android's libc, which is
+# named libc.so. Under glibc's loader the preload is honoured, its dependency
+# on libc.so is searched for in the glibc directory, and what is found there is
+# a TEXT LINKER SCRIPT of the same name. The loader then stops with
+#   error while loading shared libraries: .../glibc/lib/libc.so: invalid ELF header
+# Measured on a phone, 12.9.2026, with LD_DEBUG=libs. Clearing the preload for
+# this one process is the fix; the surrounding shell keeps its own.
+unset LD_PRELOAD
+
+# LD_LIBRARY_PATH is deliberately NOT set here either. The same libc.so script
+# would then be on the library path of every Termux command the launcher runs,
+# which breaks them with "bad ELF magic: 2f2a2047". The binary carries its own
+# rpath instead, written in by the installer.
 
 # Android has no /tmp. Claude Code needs somewhere writable to work.
 export TMPDIR="\${TMPDIR:-$PREFIX/tmp}"
@@ -543,6 +552,10 @@ verify() {
   ok "$BIN_DIR/claude exists and is executable"
   local out rc
   out=$("$BIN_DIR/claude" --version 2>&1); rc=$?
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'libc.so: invalid ELF header'; then
+    bad "the Termux preload is being pulled into the glibc process"
+    note "the launcher should clear LD_PRELOAD; check $BIN_DIR/claude for 'unset LD_PRELOAD'"
+  fi
   if [ "$rc" -eq 0 ]; then
     ok "claude --version says: $out"
     return 0
@@ -609,5 +622,5 @@ EOF
 if [ "${CCT_SOURCE_ONLY:-0}" != "1" ]; then
   main "$@"
 fi
-# CLAUDE_CODE_TERMUX_COMPLETE_MARKER edition v4 — a truncated copy cannot carry this line
+# CLAUDE_CODE_TERMUX_COMPLETE_MARKER edition v5 — a truncated copy cannot carry this line
 # CCT_COMPLETE_V2
