@@ -184,7 +184,25 @@ else
   fail "the run printed enough to look alive" "only $LONGEST_GAP lines"
 fi
 
+# The proot launcher is generated here and checked, though it cannot be run:
+# no proot-distro exists on a test machine.
+PROOT_LAUNCHER="$(CCT_SOURCE_ONLY=1 bash -c '
+  export PREFIX="'"$PREFIX"'" BIN_DIR="'"$PREFIX"'/bin"
+  . "'"$HERE"'/../install.sh"
+  BIN_DIR="'"$PREFIX"'/bin"
+  write_launcher_proot >/dev/null 2>&1
+  cat "$BIN_DIR/claude"')"
+assert_ok "the proot launcher parses" bash -c "printf '%s' \"\$1\" | bash -n" _ "$PROOT_LAUNCHER"
+assert_contains "it clears the Termux preload too" "unset LD_PRELOAD" "$PROOT_LAUNCHER"
+# MEASURED ON A PHONE, 12.9.2026: proot-distro login always starts in the
+# container's home, so "cd myproject && claude" opened Claude Code in the home
+# directory and it could not see the project files at all.
+assert_contains "it resolves the working directory with symlinks followed" "pwd -P" "$PROOT_LAUNCHER"
+assert_contains "it binds that directory into the container" '--bind "$CCT_CWD:$CCT_CWD"' "$PROOT_LAUNCHER"
+assert_contains "and changes into it before starting" 'cd "$1"' "$PROOT_LAUNCHER"
+
 skip "claude --version actually running" "this machine is not aarch64; only a phone can prove it"
+skip "the proot launcher actually entering the directory" "no proot-distro here; only a phone can prove it"
 skip "pkg install against real Termux repositories" "no Termux here"
 
 t_summary "TEST 2"
