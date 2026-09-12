@@ -1,580 +1,575 @@
-#!/usr/bin/env bash
+#!/data/data/com.termux/files/usr/bin/bash
 #
-# CLAUDE_CODE_TERMUX — install Claude Code on Android / Termux
-# Version 2 (whole numbers only, per versioning.md)
+# CLAUDE_CODE_TERMUX — Claude Code on Android, through Termux.
+# edition: v3
 #
-#   curl -fsSL https://raw.githubusercontent.com/markoboskoauroville/CLAUDE_CODE_TERMUX/main/install.sh -o cct.sh
-#   bash cct.sh
+#   curl -fsSL https://raw.githubusercontent.com/markoboskoauroville/CLAUDE_CODE_TERMUX/main/install.sh | bash
 #
-# Options:
-#   --native      patched linux-arm64 binary on Termux glibc   (~600 MB)
+# Flags:
+#   --native      patched linux-arm64 binary on Termux glibc  (~600 MB)
 #   --proot       official installer inside Ubuntu via proot   (~2.5 GB)
-#   --update      re-download and re-patch the newest build
+#   --update      re-fetch and re-install
 #   --extras      also install node, python, openssh
-#   --rollback    switch back to the previously installed build
-#   --quiet       fewer lines (progress bars stay)
-#   --help
+#   --yes         take every default, ask nothing
 #
-# Everything is wrapped in cct_main and called on the last line. A truncated
-# download therefore does nothing at all instead of installing half an app.
-# (termux-app.md section 10: bash -n is not a completeness check.)
-
-cct_main() {
+# Anthropic ships Claude Code as one glibc-linked binary. The CDN carries
+# darwin, linux and win32 builds; there is no android-arm64. Android runs on
+# Bionic. --native repoints the ELF interpreter at Termux's glibc-runner;
+# --proot runs the official installer inside a real glibc userland.
 
 set -uo pipefail
 
-CCT_VERSION=2
-CDN="https://downloads.claude.ai/claude-code-releases"
+CCT_EDITION=3
+CCT_REPO="markoboskoauroville/CLAUDE_CODE_TERMUX"
+# These three are overridable so a fork, a mirror, or a test harness can point
+# them elsewhere. The defaults are the real ones.
+CCT_RAW="${CCT_RAW:-https://raw.githubusercontent.com/$CCT_REPO/main/install.sh}"
+CDN="${CCT_CDN:-https://downloads.claude.ai/claude-code-releases}"
+
 PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 BIN_DIR="$PREFIX/bin"
 OPT_DIR="$PREFIX/opt/claude-code"
-STAGE=""
 DISTRO="ubuntu"
-LOG="${TMPDIR:-/tmp}/cct-install.log"
 
-MODE=""
-UPDATE=0
-EXTRAS=0
-ROLLBACK=0
-QUIET=0
-STEP=0
-STEPS=7
-WAKELOCK=0
-GLIBC_LIB=""
+MODE=""; UPDATE=0; EXTRAS=0; ASSUME_YES=0
+STEP=0; STEPS=9
+T_START=$(date +%s)
 
-# ---------------------------------------------------------------- colours ---
-# design-language.md: green means on, amber means the active thing, red means
-# stop. Colour only when stdout is a terminal (termux-app.md section 9).
+# Every wait on something outside this process carries a deadline.
+NET_CONNECT_TIMEOUT="${CCT_CONNECT_TIMEOUT:-20}"
+NET_SMALL_TIMEOUT="${CCT_SMALL_TIMEOUT:-60}"
+NET_BIG_TIMEOUT="${CCT_BIG_TIMEOUT:-1800}"
+
+# ============================================================ appearance ===
+# Colour only when stdout is a terminal, so a piped or logged run stays readable.
 if [ -t 1 ]; then
-  C_G=$'\033[38;5;35m'; C_A=$'\033[38;5;214m'; C_R=$'\033[38;5;167m'
-  C_D=$'\033[38;5;244m'; C_B=$'\033[1m'; C_0=$'\033[0m'
+  BOLD=$'\033[1m'; DIM=$'\033[2m'; AMBER=$'\033[38;5;214m'
+  GREEN=$'\033[38;5;114m'; RED=$'\033[38;5;174m'; OFF=$'\033[0m'
+  TTY=1
 else
-  C_G=""; C_A=""; C_R=""; C_D=""; C_B=""; C_0=""
+  BOLD=""; DIM=""; AMBER=""; GREEN=""; RED=""; OFF=""
+  TTY=0
 fi
 
-log()  { printf '%s\n' "$*" >> "$LOG" 2>/dev/null || true; }
-out()  { printf '%s\n' "$*"; log "$*"; }
-step() { STEP=$((STEP+1)); out ""; out "${C_A}[$STEP/$STEPS]${C_0} ${C_B}$*${C_0}"; }
-info() { [ "$QUIET" = 1 ] || out "      $*"; }
-ok()   { out "      ${C_G}ok${C_0}   $*"; }
-bad()  { out "      ${C_R}fail${C_0} $*"; }
-note() { out "      ${C_A}note${C_0} $*"; }
-die()  { out ""; out "${C_R}stopped:${C_0} $*"; out "      full log: $LOG"; exit 1; }
+elapsed() { printf '%s' "$(( $(date +%s) - T_START ))"; }
 
-# ------------------------------------------------------- terminal safety ---
-# termux-app.md section 8: arm the trap BEFORE the first stty, not after.
-CURSOR_HIDDEN=0
-cct_cleanup() {
-  local rc=$?
-  [ "$CURSOR_HIDDEN" = 1 ] && printf '\033[?25h'
-  [ -t 0 ] && stty sane 2>/dev/null
-  [ -n "$STAGE" ] && [ -d "$STAGE" ] && rm -rf "$STAGE"
-  if [ "$WAKELOCK" = 1 ] && command -v termux-wake-unlock >/dev/null 2>&1; then
-    termux-wake-unlock >/dev/null 2>&1
-  fi
-  if [ "$rc" -gt 1 ]; then
-    printf '\n%s\n' "${C_R}interrupted (code $rc)${C_0} — nothing was left half-installed."
-  fi
-  return $rc
+step() {
+  STEP=$((STEP + 1))
+  printf '\n%s[ %d / %d ]%s %s%s%s  %s(%ss elapsed)%s\n' \
+    "$AMBER" "$STEP" "$STEPS" "$OFF" "$BOLD" "$1" "$OFF" "$DIM" "$(elapsed)" "$OFF"
 }
-trap cct_cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+info() { printf '        %s\n' "$*"; }
+ok()   { printf '        %sok%s    %s\n' "$GREEN" "$OFF" "$*"; }
+bad()  { printf '        %sno%s    %s\n' "$RED" "$OFF" "$*"; }
+note() { printf '        %s%s%s\n' "$DIM" "$*" "$OFF"; }
+die()  { printf '\n%sStopped:%s %s\n\n' "$RED" "$OFF" "$*" >&2; exit 1; }
 
-# ------------------------------------------------------------- progress ----
-# A bar that moves on elapsed time, printed beside the command that is running.
-# Its purpose is to prove the script is alive during apt and proot, which can
-# print nothing for minutes at a stretch.
-bar_line() {
-  local pct="$1" label="$2" secs="$3" width=24 filled empty
-  filled=$(( pct * width / 100 ))
-  [ "$filled" -gt "$width" ] && filled=$width
-  [ "$filled" -lt 0 ] && filled=0
-  empty=$(( width - filled ))
-  printf '\r      %s%s%s%s%s %3d%%  %s %ss   ' \
-    "$C_A" "$(printf '%*s' "$filled" '' | tr ' ' '#')" \
-    "$C_D" "$(printf '%*s' "$empty" '' | tr ' ' '.')" "$C_0" \
-    "$pct" "$label" "$secs"
-}
-
-# run_watched <label> <expected_seconds> <command...>
-# Shows a live bar and the elapsed time, then prints the real outcome. On
-# failure the last 25 lines of output are shown — silent-failure.md: a failure
-# nobody sees is the expensive kind.
-run_watched() {
-  local label="$1" expect="$2"; shift 2
-  local tmp; tmp="$(mktemp)"
-  log "--- $label: $* ---"
-  ( "$@" >"$tmp" 2>&1 ) &
-  local pid=$! secs=0 pct=0 denom start
-  denom=$expect; [ "$denom" -lt 1 ] && denom=30
-  start=$(date +%s)
-  if [ -t 1 ]; then printf '\033[?25l'; CURSOR_HIDDEN=1; fi
-  # Polled five times a second so the bar moves, but elapsed time is read from
-  # the clock, never counted in loop iterations.
-  while kill -0 "$pid" 2>/dev/null; do
-    secs=$(( $(date +%s) - start ))
-    pct=$(( secs * 90 / denom ))
-    [ "$pct" -gt 95 ] && pct=95
-    [ -t 1 ] && bar_line "$pct" "$label" "$secs"
-    sleep 0.2
-  done
-  wait "$pid"; local rc=$?
-  secs=$(( $(date +%s) - start ))
-  if [ -t 1 ]; then bar_line 100 "$label" "$secs"; printf '\033[?25h\r\033[K'; CURSOR_HIDDEN=0; fi
-  cat "$tmp" >> "$LOG" 2>/dev/null || true
+# Stream a command's output indented, so a long install never looks stalled.
+run() {
+  local label="$1"; shift
+  printf '        %srunning%s %s\n' "$DIM" "$OFF" "$label"
+  local t0 rc
+  t0=$(date +%s)
+  "$@" 2>&1 | while IFS= read -r line; do printf '        %s| %s%s\n' "$DIM" "$line" "$OFF"; done
+  rc=${PIPESTATUS[0]}
   if [ "$rc" -eq 0 ]; then
-    ok "$label (${secs}s)"
+    ok "$label  ($(( $(date +%s) - t0 ))s)"
   else
-    bad "$label (${secs}s, exit $rc)"
-    out ""
-    tail -25 "$tmp" | sed "s/^/      ${C_D}| ${C_0}/"
-    out ""
+    bad "$label  exit $rc"
   fi
-  rm -f "$tmp"
-  return $rc
+  return "$rc"
 }
 
-have() { command -v "$1" >/dev/null 2>&1; }
-
-# --------------------------------------------------------------- options ---
-for arg in "$@"; do
-  case "$arg" in
-    --native)   MODE="native" ;;
-    --proot)    MODE="proot" ;;
-    --update)   UPDATE=1 ;;
-    --extras)   EXTRAS=1 ;;
-    --rollback) ROLLBACK=1 ;;
-    --quiet)    QUIET=1 ;;
-    -h|--help)  sed -n '3,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; return 0 ;;
-    *) printf '%s\n' "unknown option: $arg (try --help)" >&2; return 1 ;;
-  esac
-done
-
-: > "$LOG" 2>/dev/null || LOG=/dev/null
-
-printf '\n%s\n' "${C_B}CLAUDE_CODE_TERMUX v$CCT_VERSION${C_0}  ${C_D}Claude Code for Android / Termux${C_0}"
-printf '%s\n' "${C_D}log: $LOG${C_0}"
-
-# ============================================================== STEP 1 =====
-# The dependency table, printed before anything is decided and before anything
-# is written. termux-app.md section 9: the installer is the only interface it has.
-dep_table() {
-  step "Environment and dependencies"
-  local missing=0 present=0 total=0
-
-  check_row() { # name  state(ok|missing|note)  detail
-    total=$((total+1))
-    case "$2" in
-      ok)      present=$((present+1)); printf '      %-16s %sok%s      %s\n' "$1" "$C_G" "$C_0" "$3" ;;
-      missing) missing=$((missing+1)); printf '      %-16s %smissing%s %s\n' "$1" "$C_A" "$C_0" "$3" ;;
-      *)       printf '      %-16s %s%s%s\n' "$1" "$C_D" "$3" "$C_0" ;;
-    esac
-  }
-
-  printf '\n      %-16s %-8s %s\n' "WHAT" "STATE" "DETAIL"
-  printf '      %s\n' "${C_D}------------------------------------------------------${C_0}"
-
-  if [ -n "${PREFIX:-}" ] && [ -d "$PREFIX/bin" ]; then
-    case "$PREFIX" in
-      *com.termux*) check_row "termux" ok "$PREFIX" ;;
-      *)            check_row "termux" note "PREFIX=$PREFIX, not Termux — continuing" ;;
-    esac
+# -------------------------------------------------------------- progress ---
+# Draws a bar from a byte count against a known total.
+draw_bar() {
+  local now="$1" total="$2" label="$3"
+  local width=22 pct=0 filled i bar="" mb_now mb_tot
+  [ "$total" -gt 0 ] && pct=$(( now * 100 / total ))
+  [ "$pct" -gt 100 ] && pct=100
+  [ "$pct" -lt 0 ] && pct=0
+  filled=$(( pct * width / 100 ))
+  for ((i=0; i<width; i++)); do
+    if [ "$i" -lt "$filled" ]; then bar="$bar#"; else bar="$bar."; fi
+  done
+  mb_now=$(( now / 1048576 )); mb_tot=$(( total / 1048576 ))
+  if [ "$TTY" = "1" ]; then
+    printf '\r        %s[%s]%s %3d%%  %s/%s MB  %s' \
+      "$AMBER" "$bar" "$OFF" "$pct" "$mb_now" "$mb_tot" "$label"
   else
-    check_row "termux" missing "no PREFIX"
-    die "this installer only runs inside Termux"
+    printf '        [%s] %3d%%  %s/%s MB  %s\n' "$bar" "$pct" "$mb_now" "$mb_tot" "$label"
   fi
+}
 
-  local machine; machine="$(uname -m)"
-  case "$machine" in
-    aarch64|arm64) check_row "architecture" ok "$machine" ;;
-    armv7l|armv8l) check_row "architecture" missing "$machine is a 32-bit userland"
-                   die "$machine cannot run Claude Code. 64-bit ARM is required." ;;
-    *)             check_row "architecture" missing "$machine"
-                   die "unsupported architecture: $machine" ;;
-  esac
-
-  check_row "android" note "$(getprop ro.build.version.release 2>/dev/null || echo unknown)"
-
-  local free_mb; free_mb=$(df -Pm "$HOME" 2>/dev/null | awk 'NR==2{print $4}')
-  if [ -n "$free_mb" ]; then
-    if [ "$free_mb" -lt 800 ]; then
-      check_row "free space" missing "${free_mb} MB (native needs ~600, proot ~2500)"
+# Download with a live bar. Polls the partial file rather than trusting curl's
+# own meter, so the number on screen is the number of bytes really on disk.
+download_bar() {
+  local url="$1" out="$2" total="$3" label="$4"
+  local last_line_at=0 pid rc now t final
+  rm -f "$out"
+  curl -fsSL --connect-timeout "$NET_CONNECT_TIMEOUT" --max-time "$NET_BIG_TIMEOUT" \
+       -o "$out" "$url" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    now=0
+    [ -f "$out" ] && now=$(stat -c %s "$out" 2>/dev/null || echo 0)
+    if [ "$TTY" = "1" ]; then
+      draw_bar "$now" "$total" "$label"
     else
-      check_row "free space" ok "${free_mb} MB"
+      t=$(date +%s)
+      if [ $(( t - last_line_at )) -ge 10 ]; then draw_bar "$now" "$total" "$label"; last_line_at=$t; fi
     fi
-  else
-    check_row "free space" note "could not measure"
-  fi
-
-  local tool
-  for tool in curl sha256sum git; do
-    if have "$tool"; then check_row "$tool" ok "$(command -v "$tool")"
-    else check_row "$tool" missing "will be installed"; fi
+    sleep 1
   done
-  for tool in python3 jq ripgrep patchelf proot-distro; do
-    if have "$tool"; then check_row "$tool" ok "$(command -v "$tool")"
-    else check_row "$tool" missing "installed only if the chosen path needs it"; fi
-  done
-
-  if curl -fsS --max-time 20 -o /dev/null "$CDN/latest" 2>>"$LOG"; then
-    check_row "claude CDN" ok "downloads.claude.ai reachable"
-  else
-    check_row "claude CDN" missing "unreachable"
-    die "cannot reach $CDN — check the network, and check Anthropic serves your region: https://www.anthropic.com/supported-countries"
-  fi
-
-  printf '      %s\n\n' "${C_D}------------------------------------------------------${C_0}"
-  # four-tests.md meta-rule 5: print the count, never an adjective.
-  out "      checked ${C_B}$total${C_0} items — ${C_G}$present ok${C_0}, ${C_A}$missing to install${C_0}"
+  wait "$pid"; rc=$?
+  final=0; [ -f "$out" ] && final=$(stat -c %s "$out" 2>/dev/null || echo 0)
+  draw_bar "$final" "$total" "$label"
+  [ "$TTY" = "1" ] && printf '\n'
+  return "$rc"
 }
 
-# ============================================================== STEP 2 =====
-choose_mode() {
-  step "Choosing an install path"
-  if [ "$ROLLBACK" = 1 ]; then MODE="rollback"; ok "rollback requested"; return 0; fi
-  if [ -n "$MODE" ]; then ok "requested on the command line: --$MODE"; return 0; fi
+# ================================================================= seams ===
+# Everything Android-specific lives here and in the launchers. The rest of the
+# script is ordinary shell, so it can be exercised on any Linux machine.
+pkg_refresh() { run "apt-get update" env DEBIAN_FRONTEND=noninteractive apt-get update -y; }
+pkg_add()     { local what="$*"; run "apt-get install $what" env DEBIAN_FRONTEND=noninteractive apt-get install -y $what; }
 
-  if [ ! -t 0 ]; then
-    MODE="native"
-    note "no interactive terminal (piped from curl) — defaulting to native"
-    note "for the other path, download first: bash cct.sh --proot"
-    return 0
-  fi
+# ============================================================== mechanism ===
+# Pure functions. No network, no package manager, no Android.
 
-  cat <<MENU
-
-      ${C_B}1) native${C_0}   ~600 MB, starts instantly.
-                  Anthropic's linux-arm64 binary with its ELF interpreter
-                  repointed at Termux glibc. A compatibility shim: an
-                  upstream change can break it until this script catches up.
-
-      ${C_B}2) proot${C_0}    ~2500 MB, a second or two slower to start.
-                  Anthropic's own installer inside an Ubuntu rootfs.
-                  A real glibc userland, so nothing is patched.
-
-MENU
-  local reply=""
-  read -r -p "      choose 1 or 2 [1]: " reply
-  case "${reply:-1}" in
-    1|native) MODE="native"; ok "native" ;;
-    2|proot)  MODE="proot";  ok "proot" ;;
-    *) die "invalid choice: $reply" ;;
-  esac
-}
-
-# ============================================================== STEP 3 =====
-wake_lock() {
-  if have termux-wake-lock; then
-    termux-wake-lock >/dev/null 2>&1 && WAKELOCK=1 && info "wake lock held for the duration"
-  else
-    note "termux-api not installed — keep Termux in the foreground or Android may kill the download"
-  fi
-}
-
-base_packages() {
-  step "Termux packages"
-  wake_lock
-  run_watched "apt-get update" 45 \
-    bash -c 'DEBIAN_FRONTEND=noninteractive apt-get update -y' \
-    || note "package lists may be stale — continuing"
-
-  info "installing: curl ca-certificates git which coreutils ripgrep"
-  run_watched "install base packages" 90 \
-    bash -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates git which coreutils ripgrep' \
-    || die "could not install base packages — see $LOG"
-
-  if [ "$EXTRAS" = 1 ]; then
-    info "installing extras: nodejs-lts python openssh jq zstd"
-    run_watched "install extras" 120 \
-      bash -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs-lts python openssh jq zstd' \
-      || note "some extras failed — not fatal"
-  else
-    run_watched "install jq and zstd" 40 \
-      bash -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y jq zstd' \
-      || note "jq/zstd unavailable — the fallback manifest parser will be used"
-  fi
-}
-
-# ============================================================ STEPS 4-7 ====
+# Reads the linux-arm64 checksum or size out of a manifest on stdin.
 manifest_field() {
   local field="$1"
-  if have python3; then
-    python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["platforms"]["linux-arm64"].get(sys.argv[1],""))' "$field"
-  elif have jq; then
-    jq -r ".platforms[\"linux-arm64\"].$field // empty"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+    print(d["platforms"]["linux-arm64"].get(sys.argv[1],""))
+except Exception:
+    pass' "$field"
   else
     tr -d '\n\r\t' \
-      | grep -o "\"linux-arm64\"[[:space:]]*:[[:space:]]*{[^{}]*}" \
-      | grep -o "\"$field\"[[:space:]]*:[[:space:]]*\"\{0,1\}[^,\"}]*" \
+      | grep -o '"linux-arm64"[[:space:]]*:[[:space:]]*{[^{}]*}' \
+      | grep -o "\"$field\"[[:space:]]*:[[:space:]]*\"\?[0-9a-fA-F]*" \
       | sed 's/.*[:"]//'
   fi
 }
 
-install_native() {
-  step "glibc compatibility layer"
-  run_watched "enable tur-repo" 40 \
-    bash -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y tur-repo' \
-    || note "tur-repo may already be enabled"
-  run_watched "refresh package lists" 40 \
-    bash -c 'DEBIAN_FRONTEND=noninteractive apt-get update -y' || true
-  run_watched "install glibc-runner and patchelf" 180 \
-    bash -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y glibc-runner patchelf' \
-    || die "could not install glibc-runner — try: pkg install tur-repo && pkg install glibc-runner"
+is_sha256()  { [[ "${1:-}" =~ ^[a-f0-9]{64}$ ]]; }
+is_version() { [[ "${1:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; }
 
-  local ld="" candidate
-  for candidate in "$PREFIX/glibc/lib/ld-linux-aarch64.so.1" "$PREFIX/opt/glibc/lib/ld-linux-aarch64.so.1"; do
-    [ -e "$candidate" ] && ld="$candidate" && break
-  done
-  [ -z "$ld" ] && ld="$(find "$PREFIX" -name 'ld-linux-aarch64.so.1' -type f 2>/dev/null | head -1)"
-  [ -n "$ld" ] || die "glibc dynamic linker not found after install — see $LOG"
-  GLIBC_LIB="$(dirname "$ld")"
-  ok "dynamic linker: $ld"
-  info "glibc libraries: $GLIBC_LIB ($(find "$GLIBC_LIB" -maxdepth 1 -name '*.so*' 2>/dev/null | wc -l) objects)"
-
-  step "Download and verify"
-  local version manifest checksum size
-  version="$(curl -fsSL --max-time 30 "$CDN/latest" | tr -d '\r\n')"
-  case "$version" in
-    [0-9]*.[0-9]*.[0-9]*) ok "current release: $version" ;;
-    *) die "the CDN did not return a version (got ${#version} bytes of something else)" ;;
-  esac
-
-  manifest="$(curl -fsSL --max-time 30 "$CDN/$version/manifest.json")"
-  checksum="$(printf '%s' "$manifest" | manifest_field checksum | tr -d ' \r\n')"
-  size="$(printf '%s' "$manifest" | manifest_field size | tr -d ' \r\n')"
-  if [ "${#checksum}" -ne 64 ]; then
-    die "no usable linux-arm64 checksum in the manifest — Anthropic may have changed the platform list"
-  fi
-  ok "expected sha256: ${checksum:0:16}..."
-  [ -n "$size" ] && ok "expected size: $(( size / 1048576 )) MB"
-
-  # Nothing touches $PREFIX until this succeeds. termux-app.md section 9.
-  STAGE="$(mktemp -d "${TMPDIR:-$PREFIX/tmp}/cct.XXXXXX")" || die "cannot create a staging directory"
-  local staged="$STAGE/claude-$version"
-
-  if [ -x "$OPT_DIR/versions/claude-$version" ] && [ "$UPDATE" != 1 ]; then
-    ok "$version is already installed and patched — nothing to download"
-    cp "$OPT_DIR/versions/claude-$version" "$staged"
-  else
-    out ""
-    info "downloading claude $version for linux-arm64"
-    info "curl prints its own progress bar below; on mobile data this is the long part"
-    out ""
-    # No --max-time: a 230 MB download on mobile data is legitimately slow.
-    # Bounded instead by a connect timeout and a stall detector — if throughput
-    # drops under 1 KB/s for 60s the transfer is abandoned rather than hanging
-    # forever. (delivery-gate.md G5: what can wait forever.)
-    curl -fL --progress-bar --retry 3 --retry-delay 2 \
-      --connect-timeout 30 --speed-limit 1024 --speed-time 60 \
-      -o "$staged" "$CDN/$version/linux-arm64/claude" || die "download failed or stalled — see $LOG"
-    out ""
-  fi
-
-  info "verifying sha256 over $(du -m "$staged" | cut -f1) MB"
-  local actual; actual="$(sha256sum "$staged" | cut -d' ' -f1)"
-  if [ "$actual" != "$checksum" ]; then
-    bad "expected $checksum"
-    bad "actual   $actual"
-    die "checksum mismatch — this is not what Anthropic published. Nothing was installed."
-  fi
-  ok "checksum verified"
-
-  step "Patching for Android"
-  chmod +x "$staged"
-  # Only the interpreter is rewritten. The library path is supplied at runtime
-  # by the launcher, so patchelf never has to move section headers on a binary
-  # that carries an appended payload.
-  patchelf --set-interpreter "$ld" "$staged" || die "patchelf failed — see $LOG"
-  local now; now="$(patchelf --print-interpreter "$staged" 2>/dev/null)"
-  [ "$now" = "$ld" ] || die "patchelf returned success but the interpreter is still '$now'"
-  ok "interpreter: $now"
-
-  step "Installing"
-  mkdir -p "$OPT_DIR/versions"
-  # Rename, never truncate: the file being replaced may be running right now.
-  # termux-app.md section 4.
-  mv "$staged" "$OPT_DIR/versions/claude-$version.new" || die "could not stage into $OPT_DIR"
-  mv -f "$OPT_DIR/versions/claude-$version.new" "$OPT_DIR/versions/claude-$version"
-  chmod +x "$OPT_DIR/versions/claude-$version"
-
-  if [ -L "$OPT_DIR/current" ]; then
-    local prev; prev="$(readlink "$OPT_DIR/current")"
-    if [ "$prev" != "$OPT_DIR/versions/claude-$version" ] && [ -x "$prev" ]; then
-      ln -sfn "$prev" "$OPT_DIR/previous"
-      info "rollback target kept: $(basename "$prev")"
-    fi
-  fi
-  ln -sfn "$OPT_DIR/versions/claude-$version" "$OPT_DIR/current.new"
-  mv -f "$OPT_DIR/current.new" "$OPT_DIR/current"
-  ok "current -> claude-$version"
-
-  write_native_launcher
-  prune_versions
+# The four-way check a downloaded installer passes before it replaces anything.
+# Each can fail while the other three pass.
+#   1 plausible size        a captive-portal page is not 10 KB of installer
+#   2 first line is #!      it is a script, not an HTML error
+#   3 bash -n is SILENT     exit 0 alone is not enough: a file cut mid-heredoc
+#                           prints a warning and still exits 0
+#   4 the sentinel is last  only a whole file can carry its own last line
+CCT_SENTINEL="CLAUDE_CODE_TERMUX_COMPLETE_MARKER"
+validate_installer() {
+  local f="$1" size first parse_out
+  [ -f "$f" ] || { echo "missing file"; return 1; }
+  size=$(stat -c %s "$f" 2>/dev/null || echo 0)
+  [ "$size" -ge 8000 ] || { echo "too small: $size bytes"; return 1; }
+  first=$(head -1 "$f")
+  [[ "$first" == "#!"* ]] || { echo "first line is not a shebang"; return 1; }
+  parse_out=$(bash -n "$f" 2>&1)
+  [ -z "$parse_out" ] || { echo "bash -n printed: $parse_out"; return 1; }
+  # The last two lines, not the last one: a second marker rides there for the
+  # benefit of the edition-2 updater, which refuses any installer lacking its
+  # own. Dropping that line would strand every phone still on v2.
+  tail -2 "$f" | grep -q "$CCT_SENTINEL" || { echo "sentinel missing, the file is truncated"; return 1; }
+  tail -2 "$f" | grep -q '^# CCT_COMPLETE_V2$' || { echo "the edition-2 compatibility marker is missing"; return 1; }
+  echo "size $size, shebang ok, parse silent, sentinel present"
+  return 0
 }
 
-write_native_launcher() {
-  local tmp="$BIN_DIR/.claude.$$"
-  mkdir -p "$BIN_DIR"
-  cat > "$tmp" <<WRAPPER
+# Writes a command beside its own name and renames over the top. A plain
+# redirect truncates the file a running shell may still be reading from, and
+# that shell then carries on at its old byte offset into whatever is there now.
+install_command() {
+  local name="$1" body="$2"
+  rm -f "$BIN_DIR/$name.new"
+  printf '%s\n' "$body" > "$BIN_DIR/$name.new" || return 1
+  chmod +x "$BIN_DIR/$name.new" || return 1
+  mv -f "$BIN_DIR/$name.new" "$BIN_DIR/$name" || return 1
+}
+
+# ============================================================== preflight ===
+preflight() {
+  step "Checking this phone"
+
+  [ -d "$BIN_DIR" ] || die "$BIN_DIR does not exist. Run this inside Termux."
+  case "$PREFIX" in
+    *com.termux*) ok "Termux prefix $PREFIX" ;;
+    *) note "prefix $PREFIX is not Termux, so this is a test environment" ;;
+  esac
+
+  local machine; machine="$(uname -m)"
+  case "$machine" in
+    aarch64|arm64) ok "architecture $machine" ;;
+    armv7l|armv8l)
+      bad "architecture $machine"
+      die "This phone runs a 32-bit Android userland. Claude Code is 64-bit only." ;;
+    x86_64) note "architecture $machine, a test environment rather than a phone" ;;
+    *) die "unsupported architecture $machine" ;;
+  esac
+
+  local free_mb
+  free_mb=$(df -Pm "$HOME" 2>/dev/null | awk 'NR==2{print $4}')
+  if [ -n "$free_mb" ]; then
+    if [ "$free_mb" -lt 1200 ]; then
+      bad "${free_mb} MB free. Native needs about 600 MB, proot about 2500 MB"
+    else
+      ok "${free_mb} MB free"
+    fi
+  fi
+
+  # A previous run that died between writing and renaming leaves these.
+  local orphan found=0
+  for orphan in "$BIN_DIR"/claude.new "$BIN_DIR"/claude-termux-update.new; do
+    [ -e "$orphan" ] && { rm -f "$orphan"; found=$((found+1)); }
+  done
+  [ "$found" -gt 0 ] && note "cleared $found half-written file(s) from an interrupted run"
+  return 0
+}
+
+dependency_table() {
+  step "Reading what is already here"
+  printf '        %-22s %-8s %s\n' "DEPENDENCY" "STATUS" "VERSION OR FIX"
+  printf '        %s\n' "----------------------------------------------------------"
+  local missing=0 name ver
+  for name in bash curl git sha256sum; do
+    if command -v "$name" >/dev/null 2>&1; then
+      ver=$("$name" --version 2>/dev/null | head -1 | cut -c1-34)
+      printf '        %-22s %sok%s       %s\n' "$name" "$GREEN" "$OFF" "${ver:-present}"
+    else
+      printf '        %-22s %sMISSING%s  %s\n' "$name" "$RED" "$OFF" "pkg install $name"
+      missing=$((missing+1))
+    fi
+  done
+  if [ "$MODE" = "native" ] || [ -z "$MODE" ]; then
+    for name in patchelf grun; do
+      if command -v "$name" >/dev/null 2>&1; then
+        printf '        %-22s %sok%s       %s\n' "$name" "$GREEN" "$OFF" "present"
+      else
+        printf '        %-22s %sMISSING%s  %s\n' "$name" "$RED" "$OFF" "installed at step 5"
+        missing=$((missing+1))
+      fi
+    done
+  fi
+  if [ -x "$BIN_DIR/claude" ]; then
+    printf '        %-22s %sok%s       %s\n' "claude" "$GREEN" "$OFF" "installed, will be replaced"
+  else
+    printf '        %-22s %s-%s        %s\n' "claude" "$DIM" "$OFF" "not yet installed"
+  fi
+  printf '        %s\n' "----------------------------------------------------------"
+  note "$missing item(s) will be fetched. Nothing is written to disk before step 5."
+  return 0
+}
+
+choose_mode() {
+  step "Choosing the install"
+  if [ -n "$MODE" ]; then ok "mode $MODE, from the command line"; return 0; fi
+  if [ ! -t 0 ] || [ "$ASSUME_YES" = "1" ]; then
+    MODE="native"
+    ok "mode native, the lighter one, since there is no terminal to ask on"
+    note "run with --proot for the Ubuntu install instead"
+    return 0
+  fi
+  cat <<'MENU'
+
+        1  native   The official linux-arm64 binary, its ELF interpreter
+                    repointed at Termux glibc. About 600 MB, starts fast,
+                    uses your Termux packages. It rests on a compatibility
+                    shim, so an upstream change can need a new edition here.
+
+        2  proot    Anthropic's own installer inside an Ubuntu rootfs.
+                    About 2500 MB, a second or two slower to start, and a
+                    real glibc userland, so it behaves like Linux.
+
+MENU
+  local reply
+  read -r -p "        Choose 1 or 2 [1]: " reply || reply=1
+  case "${reply:-1}" in
+    1|native|"") MODE="native" ;;
+    2|proot)     MODE="proot" ;;
+    *) die "not an option: $reply" ;;
+  esac
+  ok "mode $MODE"
+}
+
+packages() {
+  step "Installing Termux packages"
+  note "apt output follows; lines scrolling past means it is working"
+  pkg_refresh || note "apt-get update was unhappy. Carrying on, the mirrors may be stale"
+  pkg_add curl ca-certificates git which coreutils grep sed tar || die "the base packages failed"
+  pkg_add ripgrep || note "ripgrep is unavailable here, Claude Code will use its own"
+  if [ "$EXTRAS" = "1" ]; then
+    pkg_add nodejs-lts python openssh jq zstd || note "some extras failed, none of them are required"
+  fi
+}
+
+# ========================================================= native install ===
+install_native() {
+  step "Installing the glibc compatibility layer"
+  pkg_add tur-repo || note "tur-repo may already be enabled"
+  pkg_refresh || true
+  pkg_add glibc-runner patchelf || die "glibc-runner or patchelf would not install"
+
+  local ld="" c
+  for c in "$PREFIX/glibc/lib/ld-linux-aarch64.so.1" "$PREFIX/opt/glibc/lib/ld-linux-aarch64.so.1"; do
+    [ -e "$c" ] && { ld="$c"; break; }
+  done
+  [ -n "$ld" ] || ld="$(find "$PREFIX" -name 'ld-linux-aarch64.so.1' -type f 2>/dev/null | head -1)"
+  [ -n "$ld" ] || die "the glibc dynamic linker is not on this system. Try: pkg install glibc-runner"
+  local glibc_lib; glibc_lib="$(dirname "$ld")"
+  ok "dynamic linker $ld"
+
+  step "Asking Anthropic which version is current"
+  local version
+  version=$(curl -fsSL --connect-timeout "$NET_CONNECT_TIMEOUT" --max-time "$NET_SMALL_TIMEOUT" \
+            "$CDN/latest" | tr -d '\r\n')
+  is_version "$version" || die "the CDN did not answer with a version. Check the network, and check that Anthropic serves your region: https://www.anthropic.com/supported-countries"
+  ok "Claude Code $version"
+
+  local manifest checksum size
+  manifest=$(curl -fsSL --connect-timeout "$NET_CONNECT_TIMEOUT" --max-time "$NET_SMALL_TIMEOUT" \
+             "$CDN/$version/manifest.json")
+  checksum=$(printf '%s' "$manifest" | manifest_field checksum | tr -d ' \r\n')
+  size=$(printf '%s' "$manifest" | manifest_field size | tr -d ' \r\n')
+  [[ "$size" =~ ^[0-9]+$ ]] || size=0
+  is_sha256 "$checksum" || die "the manifest carries no linux-arm64 checksum"
+  ok "manifest says $(( size / 1048576 )) MB, sha256 ${checksum:0:12}..."
+
+  mkdir -p "$OPT_DIR/versions"
+  local target="$OPT_DIR/versions/claude-$version"
+
+  step "Downloading the binary"
+  if [ -x "$target" ] && [ "$UPDATE" != "1" ]; then
+    ok "$version is already here, skipping the download"
+  else
+    info "about $(( size / 1048576 )) MB. Keep Termux in the foreground so Android lets it finish"
+    download_bar "$CDN/$version/linux-arm64/claude" "$target.part" "$size" "claude $version" \
+      || die "the download did not finish"
+    local got actual
+    got=$(stat -c %s "$target.part" 2>/dev/null || echo 0)
+    info "checking the sha256 against Anthropic's published manifest"
+    actual=$(sha256sum "$target.part" | cut -d' ' -f1)
+    if [ "$actual" != "$checksum" ]; then
+      rm -f "$target.part"
+      die "checksum mismatch, so nothing was installed. Got $got bytes, sha256 ${actual:0:16}..., expected ${checksum:0:16}..."
+    fi
+    ok "sha256 matches, $got bytes"
+    mv -f "$target.part" "$target"
+    chmod +x "$target"
+  fi
+
+  step "Patching the binary for Android"
+  info "repointing the ELF interpreter at $ld"
+  if patchelf --set-interpreter "$ld" "$target" 2>&1 | sed 's/^/        | /'; then
+    ok "interpreter patched"
+  else
+    die "patchelf could not rewrite the interpreter"
+  fi
+  ln -sfn "$target" "$OPT_DIR/current"
+  printf 'native\n' > "$OPT_DIR/mode"
+
+  step "Writing the commands"
+  write_launcher_native "$glibc_lib" || die "could not write $BIN_DIR/claude"
+  write_updater || die "could not write $BIN_DIR/claude-termux-update"
+  ok "claude               runs $OPT_DIR/current"
+  ok "claude-termux-update fetches and installs in one run"
+
+  # Keep the current build and the one before it, and nothing older.
+  ( cd "$OPT_DIR/versions" 2>/dev/null && ls -1t 2>/dev/null | tail -n +3 | xargs -r rm -f ) || true
+}
+
+write_launcher_native() {
+  local glibc_lib="$1"
+  install_command claude "$(cat <<WRAPPER
 #!$PREFIX/bin/bash
-# Claude Code launcher for Termux — CLAUDE_CODE_TERMUX v$CCT_VERSION
-export LD_LIBRARY_PATH="$GLIBC_LIB\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
-# Android has no /tmp, and Claude Code needs somewhere writable.
+# Claude Code launcher for Termux. CLAUDE_CODE_TERMUX edition v$CCT_EDITION.
+export LD_LIBRARY_PATH="$glibc_lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+# Android has no /tmp. Claude Code needs somewhere writable to work.
 export TMPDIR="\${TMPDIR:-$PREFIX/tmp}"
 mkdir -p "\$TMPDIR"
-# Termux's own ripgrep, not the glibc one packed inside the binary.
+# Termux's own ripgrep, which is built for Bionic.
 export USE_BUILTIN_RIPGREP=0
-# The built-in updater would replace this patched binary with one that cannot
-# start on Android. Use claude-termux-update instead.
+# The built-in updater would fetch an unpatched binary over the patched one and
+# the next launch would not start. claude-termux-update does it correctly.
 export DISABLE_AUTOUPDATER=1
 exec "$OPT_DIR/current" "\$@"
 WRAPPER
-  chmod +x "$tmp"
-  mv -f "$tmp" "$BIN_DIR/claude"
-
-  tmp="$BIN_DIR/.claude-termux-update.$$"
-  cat > "$tmp" <<'UPDATER'
-#!/usr/bin/env bash
-# Fetch the installer to a file, check it is complete, then run it.
-# Never pipe an updater straight into bash: a truncated download parses fine
-# and installs half an app. termux-app.md section 10.
-set -euo pipefail
-URL="https://raw.githubusercontent.com/markoboskoauroville/CLAUDE_CODE_TERMUX/main/install.sh"
-TMP="$(mktemp)"
-trap 'rm -f "$TMP"' EXIT
-echo "==> fetching the installer"
-curl -fsSL --max-time 60 -o "$TMP" "$URL"
-echo "==> $(wc -c < "$TMP") bytes, $(wc -l < "$TMP") lines"
-bash -n "$TMP" || { echo "installer does not parse — aborting"; exit 1; }
-grep -q '^# CCT_COMPLETE_V2$' "$TMP" || { echo "installer is truncated — aborting"; exit 1; }
-echo "==> complete, and it parses"
-exec bash "$TMP" --native --update "$@"
-UPDATER
-  chmod +x "$tmp"
-  mv -f "$tmp" "$BIN_DIR/claude-termux-update"
-  ok "claude and claude-termux-update installed in $BIN_DIR"
+)"
 }
 
-prune_versions() {
-  # versioning.md: only two artefacts kept.
-  local keep_prev; keep_prev="$(readlink "$OPT_DIR/previous" 2>/dev/null || echo '')"
-  local old
-  if [ -d "$OPT_DIR/versions" ]; then
-    ( cd "$OPT_DIR/versions" && ls -1t 2>/dev/null | tail -n +3 ) | while read -r old; do
-      [ -z "$old" ] && continue
-      [ "$OPT_DIR/versions/$old" = "$keep_prev" ] && continue
-      rm -f "$OPT_DIR/versions/$old"
-    done
-  fi
-  info "builds on disk: $(ls -1 "$OPT_DIR/versions" 2>/dev/null | wc -l)"
-}
-
+# ========================================================== proot install ===
 install_proot() {
-  step "proot-distro"
-  run_watched "install proot-distro" 60 \
-    bash -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y proot-distro' \
-    || die "could not install proot-distro"
+  step "Installing proot-distro"
+  pkg_add proot-distro || die "proot-distro would not install"
 
+  step "Unpacking the $DISTRO rootfs"
   if proot-distro list --installed 2>/dev/null | grep -q "$DISTRO"; then
-    ok "$DISTRO rootfs already present"
+    ok "$DISTRO is already here"
   else
-    step "Ubuntu rootfs"
-    info "a few hundred MB — proot-distro prints its own progress below"
-    proot-distro install "$DISTRO" || die "proot-distro install $DISTRO failed"
-    ok "$DISTRO installed"
+    info "a few hundred MB to fetch, then it unpacks, and the unpack is quiet for a while"
+    run "proot-distro install $DISTRO" proot-distro install "$DISTRO" \
+      || die "the $DISTRO rootfs did not install"
   fi
 
-  step "Claude Code inside Ubuntu"
-  run_watched "apt update inside ubuntu" 90 \
-    proot-distro login "$DISTRO" --termux-home -- bash -lc \
-      'export DEBIAN_FRONTEND=noninteractive; apt-get update -y' || note "continuing"
-  run_watched "dependencies inside ubuntu" 120 \
-    proot-distro login "$DISTRO" --termux-home -- bash -lc \
-      'export DEBIAN_FRONTEND=noninteractive; apt-get install -y curl ca-certificates git ripgrep less' \
-    || die "could not install dependencies inside $DISTRO"
-  run_watched "anthropic installer" 300 \
-    proot-distro login "$DISTRO" --termux-home -- bash -lc \
-      'curl -fsSL --connect-timeout 30 --speed-limit 1024 --speed-time 120 https://claude.ai/install.sh | bash' \
-    || die "Anthropic's installer failed inside $DISTRO — see $LOG"
-  proot-distro login "$DISTRO" --termux-home -- bash -lc \
-    'grep -q ".local/bin" "$HOME/.bashrc" 2>/dev/null || echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$HOME/.bashrc"' \
-    >/dev/null 2>&1
+  step "Installing Claude Code inside $DISTRO"
+  info "Anthropic's own installer runs in there and its output follows"
+  run "claude install inside $DISTRO" proot-distro login "$DISTRO" --termux-home -- bash -lc '
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y
+    apt-get install -y curl ca-certificates git ripgrep less
+    curl -fsSL --connect-timeout 20 --max-time 900 https://claude.ai/install.sh | bash
+    grep -q ".local/bin" "$HOME/.bashrc" 2>/dev/null || \
+      echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$HOME/.bashrc"
+  ' || die "the install inside $DISTRO did not finish"
 
-  step "Installing"
-  local tmp="$BIN_DIR/.claude.$$"
-  cat > "$tmp" <<WRAPPER
+  mkdir -p "$OPT_DIR"
+  printf 'proot\n' > "$OPT_DIR/mode"
+
+  step "Writing the commands"
+  write_launcher_proot || die "could not write $BIN_DIR/claude"
+  write_updater || die "could not write $BIN_DIR/claude-termux-update"
+  ok "claude               enters $DISTRO with your Termux home mounted"
+  ok "claude-termux-update runs claude update inside $DISTRO"
+}
+
+write_launcher_proot() {
+  install_command claude "$(cat <<WRAPPER
 #!$PREFIX/bin/bash
-# Claude Code launcher for Termux (proot path) — CLAUDE_CODE_TERMUX v$CCT_VERSION
+# Claude Code launcher for Termux, proot path. CLAUDE_CODE_TERMUX edition v$CCT_EDITION.
 exec proot-distro login $DISTRO --termux-home -- bash -lc \\
   'export PATH="\$HOME/.local/bin:\$PATH"; exec claude "\$@"' claude "\$@"
 WRAPPER
-  chmod +x "$tmp"; mv -f "$tmp" "$BIN_DIR/claude"
+)"
+}
 
-  tmp="$BIN_DIR/.claude-termux-update.$$"
-  cat > "$tmp" <<WRAPPER
+# ================================================================ updater ===
+# Fetches and installs in the same run. An updater that only leaves a command
+# behind looks exactly like nothing happening.
+write_updater() {
+  install_command claude-termux-update "$(cat <<UPDATER
 #!$PREFIX/bin/bash
-exec proot-distro login $DISTRO --termux-home -- bash -lc \\
-  'export PATH="\$HOME/.local/bin:\$PATH"; claude update'
-WRAPPER
-  chmod +x "$tmp"; mv -f "$tmp" "$BIN_DIR/claude-termux-update"
-  ok "claude and claude-termux-update installed in $BIN_DIR"
+# claude-termux-update — CLAUDE_CODE_TERMUX edition v$CCT_EDITION
+set -uo pipefail
+PREFIX="\${PREFIX:-$PREFIX}"
+RAW="$CCT_RAW"
+MODE_FILE="$OPT_DIR/mode"
+SENTINEL="$CCT_SENTINEL"
+MODE="native"; [ -r "\$MODE_FILE" ] && MODE="\$(cat "\$MODE_FILE")"
+
+# The four completeness checks, emitted from the installer's own function so
+# that there is one copy of the rule rather than two that must be kept in step.
+CCT_SENTINEL="\$SENTINEL"
+$(declare -f validate_installer)
+
+mkdir -p "\${TMPDIR:-\$PREFIX/tmp}"
+TMP="\$(mktemp "\${TMPDIR:-\$PREFIX/tmp}/cct-XXXXXX.sh")"
+
+echo "==> fetching the current installer"
+if ! curl -fsSL --connect-timeout 20 --max-time 120 -o "\$TMP" "\$RAW"; then
+  rm -f "\$TMP"
+  echo "Could not fetch the installer. This repository is public and the download" >&2
+  echo "needs no account, so a 404 means the file moved and anything else means the" >&2
+  echo "network. Nothing was changed." >&2
+  exit 1
+fi
+
+echo "==> checking what arrived"
+if ! detail=\$(validate_installer "\$TMP"); then
+  rm -f "\$TMP"
+  echo "Nothing was changed: \$detail" >&2
+  exit 1
+fi
+echo "    \$detail"
+
+echo "==> installing, mode \$MODE"
+bash "\$TMP" "--\$MODE" --update --yes
+rc=\$?
+rm -f "\$TMP"
+exit \$rc
+UPDATER
+)"
 }
 
-do_rollback() {
-  step "Rollback"
-  [ -L "$OPT_DIR/previous" ] || die "no previous build recorded — nothing to roll back to"
-  local target; target="$(readlink "$OPT_DIR/previous")"
-  [ -x "$target" ] || die "the recorded previous build is gone: $target"
-  ln -sfn "$target" "$OPT_DIR/current.new"
-  mv -f "$OPT_DIR/current.new" "$OPT_DIR/current"
-  ok "current -> $(basename "$target")"
-}
-
+# ================================================================= verify ===
 verify() {
   step "Verifying"
-  local text rc
-  text="$("$BIN_DIR/claude" --version 2>&1)"; rc=$?
+  if [ ! -x "$BIN_DIR/claude" ]; then bad "$BIN_DIR/claude was not created"; return 1; fi
+  ok "$BIN_DIR/claude exists and is executable"
+  local out rc
+  out=$("$BIN_DIR/claude" --version 2>&1); rc=$?
   if [ "$rc" -eq 0 ]; then
-    ok "claude --version -> $text"
+    ok "claude --version says: $out"
     return 0
   fi
   bad "claude --version exited $rc"
-  printf '%s\n' "$text" | sed "s/^/      ${C_D}| ${C_0}/"
-  note "the launcher is installed but did not run. See Troubleshooting in the README."
+  printf '        %s| %s%s\n' "$DIM" "$out" "$OFF"
+  note "the Troubleshooting section of the README covers what this means"
   return 1
 }
 
-# ------------------------------------------------------------------ main ---
-dep_table
-choose_mode
-[ "$MODE" = "rollback" ] || base_packages
+# =================================================================== main ===
+usage() { sed -n '2,20p' "$0"; }
 
-case "$MODE" in
-  native)   STEPS=8; install_native ;;
-  proot)    STEPS=7; install_proot ;;
-  rollback) STEPS=3; do_rollback ;;
-esac
-
-verify_rc=0
-verify || verify_rc=1
-
-out ""
-out "${C_B}Installed:${C_0} $MODE"
-out ""
-out "      start it with        ${C_B}claude${C_0}"
-out "      update later with    ${C_B}claude-termux-update${C_0}"
-[ "$MODE" = "native" ] && out "      go back a version    ${C_B}bash cct.sh --rollback${C_0}"
-out "      remove it with       ${C_B}bash uninstall.sh${C_0}"
-out ""
-out "      First run opens a browser to log in. Claude Code needs a paid Claude"
-out "      plan (Pro, Max, Team, Enterprise) or a Console API key."
-out ""
-out "${C_D}      log: $LOG${C_0}"
-
-return $verify_rc
+parse_args() {
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --native) MODE="native" ;;
+      --proot)  MODE="proot" ;;
+      --update) UPDATE=1 ;;
+      --extras) EXTRAS=1 ;;
+      --yes|-y) ASSUME_YES=1 ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "not an option: $a  (try --help)" ;;
+    esac
+  done
 }
 
-# Last line, and the completeness marker the updater greps for.
-cct_main "$@"
+main() {
+  parse_args "$@"
+  printf '\n%s CLAUDE_CODE_TERMUX %sedition v%s%s\n' "$AMBER" "$BOLD" "$CCT_EDITION" "$OFF"
+  printf ' %sClaude Code on Android. Nine steps, and every one prints what it did.%s\n' "$DIM" "$OFF"
+
+  preflight     || exit 1
+  dependency_table
+  choose_mode
+  packages
+  case "$MODE" in
+    native) install_native ;;
+    proot)  install_proot ;;
+  esac
+  verify; local vrc=$?
+
+  printf '\n%s Finished in %s seconds.%s\n\n' "$AMBER" "$(elapsed)" "$OFF"
+  cat <<EOF
+        Start it:            claude
+        Update it later:     claude-termux-update
+        Remove it:           bash uninstall.sh
+
+        The first run opens a browser to log in. Claude Code needs a paid
+        Claude plan or a Console API key.
+
+        Run these two once, by hand, if you have not:
+            termux-setup-storage     access to the phone's files
+            termux-wake-lock         stops Android sleeping during a long job
+
+        Installed mode: $MODE
+
+EOF
+  return "$vrc"
+}
+
+# Sourcing this file for testing gets the functions and runs nothing.
+if [ "${CCT_SOURCE_ONLY:-0}" != "1" ]; then
+  main "$@"
+fi
+# CLAUDE_CODE_TERMUX_COMPLETE_MARKER edition v3 — a truncated copy cannot carry this line
 # CCT_COMPLETE_V2
