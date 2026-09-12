@@ -149,9 +149,9 @@ MIT. See [LICENSE](LICENSE).
 
 ---
 
-## Edition 5
+## Edition 6
 
-`install.sh` is edition 5. The filename never changes, because
+`install.sh` is edition 6. The filename never changes, because
 `claude-termux-update` fetches it by that address; the number lives in the
 `edition:` line at the top of the file and in its last two lines.
 
@@ -191,4 +191,4 @@ bash gates/gate.sh          # the nine gates
 ```
 
 The delivery record, including everything that was **not** tested, is in
-[DELIVERY-v5.md](DELIVERY-v5.md).
+[DELIVERY-v6.md](DELIVERY-v6.md).
