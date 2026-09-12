@@ -172,8 +172,11 @@ assert_contains "the updater carries a deadline"  "--max-time" "$UPD"
 
 # ---- the verbose contract: the person must see progress -------------------
 OUT="$(cat "$LOG")"
-assert_contains "step 1 of 9 is announced"      "[ 1 / 9 ]" "$OUT"
-assert_contains "step 9 of 9 is reached"        "[ 9 / 9 ]" "$OUT"
+STEPS_N="$(grep -m1 '^STEP=0; STEPS=' "$HERE/../install.sh" | grep -o '[0-9]*$')"
+assert_contains "the first step is announced"  "[ 1 / $STEPS_N ]" "$OUT"
+# the final step number comes from the script, never written out here
+assert_contains "the last step is reached" "[ $STEPS_N / $STEPS_N ]" "$OUT"
+assert_contains "the shortcut step ran"    "one-letter shortcut"     "$OUT"
 assert_contains "the dependency table is drawn" "DEPENDENCY" "$OUT"
 assert_contains "a progress bar was drawn"      "MB  claude" "$OUT"
 assert_contains "apt output was streamed, not hidden" "apt-get stand-in" "$OUT"
