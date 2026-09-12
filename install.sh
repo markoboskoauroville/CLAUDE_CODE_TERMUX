@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #
 # CLAUDE_CODE_TERMUX — Claude Code on Android, through Termux.
-# edition: v3
+# edition: v4
 #
 #   curl -fsSL https://raw.githubusercontent.com/markoboskoauroville/CLAUDE_CODE_TERMUX/main/install.sh | bash
 #
@@ -19,7 +19,7 @@
 
 set -uo pipefail
 
-CCT_EDITION=3
+CCT_EDITION=4
 CCT_REPO="markoboskoauroville/CLAUDE_CODE_TERMUX"
 # These three are overridable so a fork, a mirror, or a test harness can point
 # them elsewhere. The defaults are the real ones.
@@ -326,6 +326,20 @@ install_native() {
   local glibc_lib; glibc_lib="$(dirname "$ld")"
   ok "dynamic linker $ld"
 
+  # The binary asks for libc.so.6 by that exact name. Check it is a real ELF
+  # before going further, because the sibling file libc.so is a text linker
+  # script and a half-installed glibc shows up as a confusing load error much
+  # later, after a 220 MB download.
+  local libc="$glibc_lib/libc.so.6"
+  if [ ! -e "$libc" ]; then
+    die "glibc is incomplete: $libc is missing. Try: pkg install glibc-runner"
+  fi
+  if [ "$(head -c 4 "$libc" | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]; then
+    ok "libc.so.6 is a real ELF object"
+  else
+    die "glibc is broken: $libc is not an ELF object. Reinstall with: pkg install --reinstall glibc-runner"
+  fi
+
   step "Asking Anthropic which version is current"
   local version
   version=$(curl -fsSL --connect-timeout "$NET_CONNECT_TIMEOUT" --max-time "$NET_SMALL_TIMEOUT" \
@@ -372,6 +386,24 @@ install_native() {
   else
     die "patchelf could not rewrite the interpreter"
   fi
+  # The library path belongs to this binary, written into the file itself.
+  # Putting the glibc directory on LD_LIBRARY_PATH instead would apply it to
+  # every process the launcher starts, and Android's own libc is named
+  # libc.so, which is exactly the name glibc uses for a text linker script.
+  # Termux commands would then load that script as a library and die with
+  # "bad ELF magic: 2f2a2047".
+  info "writing the glibc library path into the binary as an rpath"
+  if patchelf --set-rpath "$glibc_lib" "$target" 2>&1 | sed 's/^/        | /'; then
+    ok "rpath set to $glibc_lib"
+  else
+    die "patchelf could not set the rpath"
+  fi
+  local got_interp got_rpath
+  got_interp="$(patchelf --print-interpreter "$target" 2>/dev/null)"
+  got_rpath="$(patchelf --print-rpath "$target" 2>/dev/null)"
+  [ "$got_interp" = "$ld" ] || die "the interpreter reads back as $got_interp, not $ld"
+  [ "$got_rpath" = "$glibc_lib" ] || die "the rpath reads back as $got_rpath, not $glibc_lib"
+  ok "read back from the file: interpreter and rpath are both correct"
   ln -sfn "$target" "$OPT_DIR/current"
   printf 'native\n' > "$OPT_DIR/mode"
 
@@ -390,7 +422,13 @@ write_launcher_native() {
   install_command claude "$(cat <<WRAPPER
 #!$PREFIX/bin/bash
 # Claude Code launcher for Termux. CLAUDE_CODE_TERMUX edition v$CCT_EDITION.
-export LD_LIBRARY_PATH="$glibc_lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+#
+# LD_LIBRARY_PATH is deliberately NOT set here. The glibc directory holds a
+# file called libc.so, which is a text linker script, and Android's own libc
+# is also called libc.so. Any Termux command run with that directory on the
+# library path loads the script and dies with "bad ELF magic: 2f2a2047".
+# The binary carries its own rpath instead, written in by the installer.
+
 # Android has no /tmp. Claude Code needs somewhere writable to work.
 export TMPDIR="\${TMPDIR:-$PREFIX/tmp}"
 mkdir -p "\$TMPDIR"
@@ -571,5 +609,5 @@ EOF
 if [ "${CCT_SOURCE_ONLY:-0}" != "1" ]; then
   main "$@"
 fi
-# CLAUDE_CODE_TERMUX_COMPLETE_MARKER edition v3 — a truncated copy cannot carry this line
+# CLAUDE_CODE_TERMUX_COMPLETE_MARKER edition v4 — a truncated copy cannot carry this line
 # CCT_COMPLETE_V2
