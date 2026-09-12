@@ -34,6 +34,12 @@ chmod +x "$WORK/apt-get"
 # A stand-in for Termux's glibc linker. patchelf only writes the path string,
 # so a real loader is not needed to prove the write happened.
 printf '\177ELF stand-in loader\n' > "$PREFIX/glibc/lib/ld-linux-aarch64.so.1"
+# What a real Termux glibc holds: a genuine ELF libc.so.6 beside a TEXT linker
+# script named libc.so. Android's own libc is also named libc.so, so any
+# directory on LD_LIBRARY_PATH that contains this script breaks every Bionic
+# command. Measured on a phone, 12.9.2026. The fixture carries the trap.
+cp /bin/true "$PREFIX/glibc/lib/libc.so.6"
+printf '/* GNU ld script */\nGROUP ( libc.so.6 )\n' > "$PREFIX/glibc/lib/libc.so"
 export PATH="$WORK:$PATH"
 
 t_head "TEST 2 — the real installer against the real CDN"
@@ -85,6 +91,13 @@ if [ -f "$BIN" ]; then
   INTERP="$(patchelf --print-interpreter "$BIN" 2>&1)"
   assert_eq "the ELF interpreter now points at Termux glibc" \
             "$PREFIX/glibc/lib/ld-linux-aarch64.so.1" "$INTERP"
+  RPATH="$(patchelf --print-rpath "$BIN" 2>&1)"
+  assert_eq "the library path is written into the binary, not left to the shell" \
+            "$PREFIX/glibc/lib" "$RPATH"
+  NEEDED="$(patchelf --print-needed "$BIN" 2>&1)"
+  assert_contains "the binary asks for libc.so.6 by that name" "libc.so.6" "$NEEDED"
+  assert_not_contains "and never for bare libc.so, which is Android's own" \
+    "$(printf 'libc.so\n')" "$(printf '%s\n' "$NEEDED" | grep -x 'libc.so')"
   # and the file is still a working aarch64 ELF, not corrupted by the rewrite
   FILE_SAYS="$(file -b "$BIN" 2>/dev/null || echo unknown)"
   assert_contains "it is still an ELF" "ELF" "$FILE_SAYS"
@@ -106,11 +119,29 @@ assert_eq "the mode was recorded" "native" "$(cat "$PREFIX/opt/claude-code/mode"
 assert_ok "current points at the binary" test -L "$PREFIX/opt/claude-code/current"
 
 LAUNCHER="$(cat "$PREFIX/bin/claude" 2>/dev/null)"
-assert_contains "the launcher sets LD_LIBRARY_PATH"   "LD_LIBRARY_PATH"      "$LAUNCHER"
+# MEASURED ON A PHONE, 12.9.2026. Exporting LD_LIBRARY_PATH pointed every
+# process the launcher started at the glibc directory. Android's libc is named
+# libc.so and glibc ships a TEXT LINKER SCRIPT under that same name, so Termux
+# commands loaded the script and died with "bad ELF magic: 2f2a2047". The
+# library path must live in the binary, never in the environment.
+if printf '%s\n' "$LAUNCHER" | grep -qE '^[^#]*export[[:space:]]+LD_LIBRARY_PATH'; then
+  fail "the launcher must not export LD_LIBRARY_PATH" \
+       "it poisons every Termux command the launcher runs"
+else
+  pass "the launcher does not export LD_LIBRARY_PATH"
+fi
 assert_contains "the launcher gives Android a TMPDIR" "TMPDIR"               "$LAUNCHER"
 assert_contains "the launcher uses Termux ripgrep"    "USE_BUILTIN_RIPGREP=0" "$LAUNCHER"
 assert_contains "the launcher disables the autoupdater" "DISABLE_AUTOUPDATER=1" "$LAUNCHER"
 assert_contains "the launcher execs the binary"       "exec "                "$LAUNCHER"
+# the mkdir must not run under a poisoned environment either
+MKDIR_LINE=$(printf '%s\n' "$LAUNCHER" | grep -n 'mkdir' | cut -d: -f1 | head -1)
+LDLP_LINE=$(printf '%s\n' "$LAUNCHER" | grep -nE '^[^#]*LD_LIBRARY_PATH' | cut -d: -f1 | head -1)
+if [ -z "$LDLP_LINE" ]; then
+  pass "no library path is set before the launcher runs mkdir"
+else
+  fail "no library path is set before the launcher runs mkdir" "line $LDLP_LINE sets it, mkdir is at line $MKDIR_LINE"
+fi
 assert_ok "the launcher is valid shell" bash -n "$PREFIX/bin/claude"
 
 UPD="$(cat "$PREFIX/bin/claude-termux-update" 2>/dev/null)"
