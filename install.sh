@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #
 # CLAUDE_CODE_TERMUX — Claude Code on Android, through Termux.
-# edition: v5
+# edition: v6
 #
 #   curl -fsSL https://raw.githubusercontent.com/markoboskoauroville/CLAUDE_CODE_TERMUX/main/install.sh | bash
 #
@@ -19,7 +19,7 @@
 
 set -uo pipefail
 
-CCT_EDITION=5
+CCT_EDITION=6
 CCT_REPO="markoboskoauroville/CLAUDE_CODE_TERMUX"
 # These three are overridable so a fork, a mirror, or a test harness can point
 # them elsewhere. The defaults are the real ones.
@@ -491,8 +491,23 @@ write_launcher_proot() {
   install_command claude "$(cat <<WRAPPER
 #!$PREFIX/bin/bash
 # Claude Code launcher for Termux, proot path. CLAUDE_CODE_TERMUX edition v$CCT_EDITION.
-exec proot-distro login $DISTRO --termux-home -- bash -lc \\
-  'export PATH="\$HOME/.local/bin:\$PATH"; exec claude "\$@"' claude "\$@"
+#
+# proot-distro login always starts in the container's home directory. Without
+# the two steps below, "cd myproject && claude" opens Claude Code in the home
+# directory instead of myproject, and it can neither see nor edit the files
+# that are right there.
+unset LD_PRELOAD
+
+# pwd -P resolves symlinks first: ~/storage/downloads is a link to
+# /storage/emulated/0/Download, and the link target is what has to be bound.
+CCT_CWD="\$(pwd -P)"
+
+# Bind the directory into the container at the same absolute path, then change
+# into it before starting. Binding a path to itself is harmless when it already
+# sits inside the Termux home that --termux-home mounts.
+exec proot-distro login $DISTRO --termux-home --bind "\$CCT_CWD:\$CCT_CWD" -- \\
+  bash -lc 'export PATH="\$HOME/.local/bin:\$PATH"; cd "\$1" || { echo "cannot enter \$1 inside the container" >&2; exit 1; }; shift; exec claude "\$@"' \\
+  claude "\$CCT_CWD" "\$@"
 WRAPPER
 )"
 }
@@ -622,5 +637,5 @@ EOF
 if [ "${CCT_SOURCE_ONLY:-0}" != "1" ]; then
   main "$@"
 fi
-# CLAUDE_CODE_TERMUX_COMPLETE_MARKER edition v5 — a truncated copy cannot carry this line
+# CLAUDE_CODE_TERMUX_COMPLETE_MARKER edition v6 — a truncated copy cannot carry this line
 # CCT_COMPLETE_V2
