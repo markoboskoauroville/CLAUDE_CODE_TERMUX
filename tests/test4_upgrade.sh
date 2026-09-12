@@ -97,7 +97,8 @@ assert_contains "the fixture really is the previous edition" "CCT_VERSION=2" "$(
 OLD_UPDATER="$(cat "$PREFIX/bin/claude-termux-update")"
 assert_not_contains "the old updater does not know this edition's marker" \
   "CLAUDE_CODE_TERMUX_COMPLETE_MARKER" "$OLD_UPDATER"
-assert_not_contains "the old run used its own step counter, not this one" "[ 1 / 9 ]" "$(cat "$WORK/old.log")"
+OLD_STEPS="$(grep -m1 '^STEP=0; STEPS=' "$HERE/../install.sh" | grep -o '[0-9]*$')"
+assert_not_contains "the old run used its own step counter, not this one" "[ 1 / $OLD_STEPS ]" "$(cat "$WORK/old.log")"
 
 # THE COMPATIBILITY CLAUSE. The previous edition's updater refuses any
 # installer that does not carry its own completeness marker. If this edition
@@ -153,7 +154,8 @@ echo "  it exited $NEW_RC"
 wait "$READER_JOB" 2>/dev/null
 
 # ==================================================== 5. CHECK EVERYTHING ===
-assert_contains "the new edition really is the new one" "[ 1 / 9 ]" "$(cat "$WORK/new.log")"
+NEW_STEPS="$(grep -m1 '^STEP=0; STEPS=' "$HERE/../install.sh" | grep -o '[0-9]*$')"
+assert_contains "the new edition really is the new one" "[ 1 / $NEW_STEPS ]" "$(cat "$WORK/new.log")"
 
 # every setting keeps its VALUE, not its default
 assert_eq "settings.json survives byte for byte" "$SETTINGS_SHA" \
