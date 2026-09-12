@@ -59,6 +59,12 @@ fresh_env() {
   mkdir -p "$PREFIX/bin" "$PREFIX/tmp" "$PREFIX/glibc/lib"
   export HOME="$WORK/home"; mkdir -p "$HOME"
   printf '\177ELF stand-in loader\n' > "$PREFIX/glibc/lib/ld-linux-aarch64.so.1"
+  # A real Termux glibc holds a genuine ELF libc.so.6 beside a TEXT linker
+  # script named libc.so. Android's own libc is also named libc.so, so any
+  # directory on LD_LIBRARY_PATH holding this script breaks every Bionic
+  # command. Measured on a phone, 12.9.2026. The fixture carries the trap.
+  cp /bin/true "$PREFIX/glibc/lib/libc.so.6"
+  printf '/* GNU ld script */\nGROUP ( libc.so.6 )\n' > "$PREFIX/glibc/lib/libc.so"
   export CCT_CDN="http://127.0.0.1:$PORT"
   export CCT_RAW="http://127.0.0.1:$PORT/install.sh"
   export CCT_CONNECT_TIMEOUT=3 CCT_SMALL_TIMEOUT=5 CCT_BIG_TIMEOUT=20
