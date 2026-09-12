@@ -149,9 +149,9 @@ MIT. See [LICENSE](LICENSE).
 
 ---
 
-## Edition 3
+## Edition 4
 
-`install.sh` is edition 3. The filename never changes, because
+`install.sh` is edition 4. The filename never changes, because
 `claude-termux-update` fetches it by that address; the number lives in the
 `edition:` line at the top of the file and in its last two lines.
 
@@ -170,6 +170,11 @@ What edition 3 adds:
   updater from that one copy.
 - **It carries `# CCT_COMPLETE_V2`**, so a phone still on edition 2 can update
   to this one. Edition 2's updater rejects any installer without that line.
+- **The glibc library path lives inside the binary**, written in as an rpath,
+  never on `LD_LIBRARY_PATH`. An environment variable applies to every process
+  the launcher starts, and the glibc directory contains a text linker script
+  called `libc.so` — the same name Android uses for its own libc. Termux
+  commands then load the script and die with `bad ELF magic: 2f2a2047`.
 
 Coming from edition 2 and want to go back? Edition 2 refuses to install over a
 patched binary, so clear it first:
@@ -186,4 +191,4 @@ bash gates/gate.sh          # the nine gates
 ```
 
 The delivery record, including everything that was **not** tested, is in
-[DELIVERY-v3.md](DELIVERY-v3.md).
+[DELIVERY-v4.md](DELIVERY-v4.md).
