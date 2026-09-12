@@ -146,3 +146,44 @@ Claude Code is made by [Anthropic](https://www.anthropic.com). Termux is made by
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+---
+
+## Edition 3
+
+`install.sh` is edition 3. The filename never changes, because
+`claude-termux-update` fetches it by that address; the number lives in the
+`edition:` line at the top of the file and in its last two lines.
+
+What edition 3 adds:
+
+- **Every step prints.** Nine numbered steps with seconds elapsed, and the
+  output of every package command streams underneath instead of going to
+  `/dev/null`. A quiet installer on a phone reads as a frozen one.
+- **A real progress bar** for the 220 MB download, drawn from the bytes
+  actually on disk against the byte count Anthropic publishes.
+- **Running it twice is safe.** The checksum is verified on freshly downloaded
+  bytes only. Verifying a file already on disk compares a patched binary
+  against the figure for an unpatched one and always fails.
+- **One copy of the completeness rule.** The four checks the updater runs
+  before replacing anything live in a single function, emitted into the
+  updater from that one copy.
+- **It carries `# CCT_COMPLETE_V2`**, so a phone still on edition 2 can update
+  to this one. Edition 2's updater rejects any installer without that line.
+
+Coming from edition 2 and want to go back? Edition 2 refuses to install over a
+patched binary, so clear it first:
+
+```bash
+rm -rf $PREFIX/opt/claude-code/versions
+```
+
+### Checking it yourself
+
+```bash
+bash tests/run_four.sh      # the four tests; test 2 downloads ~230 MB
+bash gates/gate.sh          # the nine gates
+```
+
+The delivery record, including everything that was **not** tested, is in
+[DELIVERY-v3.md](DELIVERY-v3.md).
