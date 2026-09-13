@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #
 # CLAUDE_CODE_TERMUX — Claude Code on Android, through Termux.
-# edition: v9
+# edition: v10
 #
 #   curl -fsSL https://raw.githubusercontent.com/markoboskoauroville/CLAUDE_CODE_TERMUX/main/install.sh | bash
 #
@@ -20,7 +20,7 @@
 
 set -uo pipefail
 
-CCT_EDITION=9
+CCT_EDITION=10
 CCT_REPO="markoboskoauroville/CLAUDE_CODE_TERMUX"
 # These three are overridable so a fork, a mirror, or a test harness can point
 # them elsewhere. The defaults are the real ones.
@@ -477,6 +477,15 @@ export USE_BUILTIN_RIPGREP=0
 # The built-in updater would fetch an unpatched binary over the patched one and
 # the next launch would not start. claude-termux-update does it correctly.
 export DISABLE_AUTOUPDATER=1
+# termux-wake-lock: Android freezes and then kills a process that has been
+# out of sight for hours -- a session that had run all morning died at its
+# desk (13.9.2026). The lock keeps Termux awake for as long as it is held; it
+# is acquired here, every start, and left held: releasing it on exit would
+# also release a lock you took by hand for something else. The Termux
+# notification has a "Release wakelock" button when you want it gone.
+# am answers in about a second; a phone without the command loses nothing.
+command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock 2>/dev/null
+
 exec "$OPT_DIR/current" "\$@"
 WRAPPER
 )"
@@ -565,6 +574,15 @@ CCT_CWD="\$(pwd -P)"
 # default socket directory and refuses it. An explicit path inside a 0700
 # directory of our own skips that check. It is also the socket that ccpush
 # and the phone's notification buttons talk to (termux-tools/notify).
+# termux-wake-lock: Android freezes and then kills a process that has been
+# out of sight for hours -- a session that had run all morning died at its
+# desk (13.9.2026). The lock keeps Termux awake for as long as it is held; it
+# is acquired here, every start, and left held: releasing it on exit would
+# also release a lock you took by hand for something else. The Termux
+# notification has a "Release wakelock" button when you want it gone.
+# am answers in about a second; a phone without the command loses nothing.
+command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock 2>/dev/null
+
 exec proot-distro login $DISTRO --termux-home --bind "\$CCT_CWD:\$CCT_CWD" -- \\
   bash -lc 'export PATH="\$HOME/.local/bin:\$PATH"; cd "\$1" || { echo "cannot enter \$1 inside the container" >&2; exit 1; }; shift; mkdir -p -m 700 "\$HOME/.claude/inbox"; exec claude --messaging-socket-path "\$HOME/.claude/inbox/cc-\$\$.sock" "\$@"' \\
   claude "\$CCT_CWD" "\$@"
@@ -726,7 +744,8 @@ main() {
 
         Run these two once, by hand, if you have not:
             termux-setup-storage     access to the phone's files
-            termux-wake-lock         stops Android sleeping during a long job
+            (the launcher takes termux-wake-lock itself on every start, so
+             Android does not freeze and kill a long job with the screen off)
 
         Installed mode: $MODE
 
@@ -738,5 +757,5 @@ EOF
 if [ "${CCT_SOURCE_ONLY:-0}" != "1" ]; then
   main "$@"
 fi
-# CLAUDE_CODE_TERMUX_COMPLETE_MARKER edition v9 — a truncated copy cannot carry this line
+# CLAUDE_CODE_TERMUX_COMPLETE_MARKER edition v10 — a truncated copy cannot carry this line
 # CCT_COMPLETE_V2

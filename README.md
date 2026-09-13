@@ -149,11 +149,17 @@ MIT. See [LICENSE](LICENSE).
 
 ---
 
-## Edition 9
+## Edition 10
 
-`install.sh` is edition 9. The filename never changes, because
+`install.sh` is edition 10. The filename never changes, because
 `claude-termux-update` fetches it by that address; the number lives in the
 `edition:` line at the top of the file and in its last two lines.
+
+What edition 10 adds: the launcher takes the Termux wake lock on every
+start, so a session left working with the screen off is not frozen and killed
+by Android hours later ([DELIVERY-v10.md](DELIVERY-v10.md)). Edition 9 gave
+the session its messaging socket under PRoot, which the phone's notification
+buttons talk to ([DELIVERY-v9.md](DELIVERY-v9.md)).
 
 What edition 3 adds:
 
@@ -202,5 +208,5 @@ bash gates/gate.sh          # the nine gates
 ```
 
 The delivery record, including everything that was **not** tested, is in
-[DELIVERY-v9.md](DELIVERY-v9.md), and the edition before it in
-[DELIVERY-v8.md](DELIVERY-v8.md).
+[DELIVERY-v10.md](DELIVERY-v10.md), and the editions before it in
+[DELIVERY-v9.md](DELIVERY-v9.md) and [DELIVERY-v8.md](DELIVERY-v8.md).
