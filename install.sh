@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #
 # CLAUDE_CODE_TERMUX — Claude Code on Android, through Termux.
-# edition: v8
+# edition: v9
 #
 #   curl -fsSL https://raw.githubusercontent.com/markoboskoauroville/CLAUDE_CODE_TERMUX/main/install.sh | bash
 #
@@ -20,7 +20,7 @@
 
 set -uo pipefail
 
-CCT_EDITION=8
+CCT_EDITION=9
 CCT_REPO="markoboskoauroville/CLAUDE_CODE_TERMUX"
 # These three are overridable so a fork, a mirror, or a test harness can point
 # them elsewhere. The defaults are the real ones.
@@ -559,8 +559,14 @@ CCT_CWD="\$(pwd -P)"
 # Bind the directory into the container at the same absolute path, then change
 # into it before starting. Binding a path to itself is harmless when it already
 # sits inside the Termux home that --termux-home mounts.
+# --messaging-socket-path: without it every start warns "Cross-session
+# messaging is off ... user namespace without a uid mapping". PRoot gives the
+# process no /proc/self/uid_map, so Claude Code cannot verify who owns its
+# default socket directory and refuses it. An explicit path inside a 0700
+# directory of our own skips that check. It is also the socket that ccpush
+# and the phone's notification buttons talk to (termux-tools/notify).
 exec proot-distro login $DISTRO --termux-home --bind "\$CCT_CWD:\$CCT_CWD" -- \\
-  bash -lc 'export PATH="\$HOME/.local/bin:\$PATH"; cd "\$1" || { echo "cannot enter \$1 inside the container" >&2; exit 1; }; shift; exec claude "\$@"' \\
+  bash -lc 'export PATH="\$HOME/.local/bin:\$PATH"; cd "\$1" || { echo "cannot enter \$1 inside the container" >&2; exit 1; }; shift; mkdir -p -m 700 "\$HOME/.claude/inbox"; exec claude --messaging-socket-path "\$HOME/.claude/inbox/cc-\$\$.sock" "\$@"' \\
   claude "\$CCT_CWD" "\$@"
 WRAPPER
 )"
@@ -732,5 +738,5 @@ EOF
 if [ "${CCT_SOURCE_ONLY:-0}" != "1" ]; then
   main "$@"
 fi
-# CLAUDE_CODE_TERMUX_COMPLETE_MARKER edition v8 — a truncated copy cannot carry this line
+# CLAUDE_CODE_TERMUX_COMPLETE_MARKER edition v9 — a truncated copy cannot carry this line
 # CCT_COMPLETE_V2
