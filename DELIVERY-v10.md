@@ -70,7 +70,7 @@ Nothing else in the installer changed.
 
     TEST 1  the mechanism, alone      termux-wake-lock from inside the PRoot:
                                       exit 0 in about one second (measured
-                                      13.9.2026, Android 16, Samsung A14)
+                                      13.9.2026, Android 16, Nothing Phone (2a), model A142)
     TEST 2  the running app           the generated proot launcher, rendered
                                       from this install.sh with CCT_SOURCE_ONLY,
                                       read line by line, parsed (bash -n) and
