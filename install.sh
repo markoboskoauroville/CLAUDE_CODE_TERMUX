@@ -549,9 +549,24 @@ install_proot() {
     ok "$DISTRO is already here, nothing to unpack"
   else
     info "a few hundred MB to fetch, then it unpacks, and the unpack is quiet for a while"
-    local out rc
-    out="$(proot-distro install "$DISTRO" 2>&1)"; rc=$?
-    printf '%s\n' "$out" | while IFS= read -r l; do printf '        %s| %s%s\n' "$DIM" "$l" "$OFF"; done
+    # proot-distro 5 and later pull the rootfs as a Docker image, from Docker
+    # Hub by default. Docker Hub limits anonymous pulls per IP address, and a
+    # mobile carrier puts many phones behind one address. Measured in the cloud
+    # emulator, 16.10.2026: "HTTP Error 429: Too Many Requests", then 502, and
+    # the install stopped. Google's mirror of Docker Hub serves the same
+    # official image without that limit, so it is the second try.
+    local out rc src
+    for src in "$DISTRO" "mirror.gcr.io/library/$DISTRO:latest"; do
+      if [ "$src" = "$DISTRO" ]; then
+        out="$(proot-distro install "$DISTRO" 2>&1)"; rc=$?
+      else
+        info "trying $src instead"
+        out="$(proot-distro install --name "$DISTRO" "$src" 2>&1)"; rc=$?
+      fi
+      printf '%s\n' "$out" | while IFS= read -r l; do printf '        %s| %s%s\n' "$DIM" "$l" "$OFF"; done
+      [ "$rc" -eq 0 ] && break
+      distro_present && break
+    done
     if [ "$rc" -ne 0 ]; then
       # An install that fails BECAUSE it is already installed is not a failure.
       if printf '%s' "$out" | grep -q 'already exists' || distro_present; then

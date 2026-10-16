@@ -99,7 +99,33 @@ chmod +x "$ASK/apt-get"
 fresh_env
 PATH="$ASK:$PATH" install_run >/dev/null
 assert_contains "apt installs pass --force-confold, so dpkg never asks" "interpreter patched" "$(cat "$WORK/out.log")"
-assert_ok "and no install reached the question" bash -c '! grep -q "What would you like" "$WORK/out.log"'
+assert_ok "and no install reached the question" bash -c "! grep -q 'What would you like' '$WORK/out.log'"
+
+# ================================================= DOCKER HUB REFUSES ======
+# proot-distro pulls Ubuntu from Docker Hub, which refused the cloud emulator
+# with 429 then 502, 16.10.2026. The installer must try Google's mirror.
+PD="$WORK/pd"; mkdir -p "$PD"
+cat > "$PD/proot-distro" <<S
+#!/bin/bash
+echo "proot-distro \$*" >> "$WORK/pd.log"
+case "\$1" in
+  install)
+    case " \$* " in
+      *" mirror.gcr.io/library/ubuntu:latest "*)
+        mkdir -p "\$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"; exit 0 ;;
+      *) echo "[!] Failed to install: Network error: HTTP Error 429: Too Many Requests"; exit 1 ;;
+    esac ;;
+  list) exit 0 ;;
+  login) exit 0 ;;
+esac
+exit 0
+S
+chmod +x "$PD/proot-distro"
+fresh_env; rm -f "$WORK/pd.log"
+PATH="$PD:$PATH" install_run --proot >/dev/null
+assert_contains "Docker Hub refusing: the mirror is tried" "mirror.gcr.io/library/ubuntu:latest" "$(cat "$WORK/pd.log")"
+assert_contains "and it is installed under the usual name" "--name ubuntu" "$(cat "$WORK/pd.log")"
+assert_ok "and the install goes on past the rootfs" bash -c "! grep -q 'rootfs did not install' '$WORK/out.log'"
 
 # ===================================================== STALE LIBRARY ======
 # patchelf newer than the phone's libc++: it will not even start until apt
