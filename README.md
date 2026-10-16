@@ -43,12 +43,13 @@ This installer gives you two ways around that.
 | How it works | official `linux-arm64` binary with its ELF interpreter repointed at Termux's `glibc-runner` | official installer inside a real Ubuntu rootfs |
 | Files live in | Termux home, directly | Termux home, shared into Ubuntu |
 | Fragility | a compatibility shim — an upstream change can break it | behaves like Claude Code on any Linux machine |
+| On a real phone | **experimental**: installed, then `Segmentation fault` on start (Nothing Phone 2a, Claude Code 2.1.301) | **proven**: runs Claude Code |
 
-Run with no flags and the script asks which one you want. Piped from `curl`, with no terminal to ask at, it defaults to `--native` and says so.
+Run with no flags and the script asks which one you want; Enter picks `--proot`. With `--yes`, or piped from `curl` with no terminal to ask at, it also picks `--proot` and says so.
 
 ```bash
-bash cct.sh --native      # light
-bash cct.sh --proot       # sturdy
+bash cct.sh --proot       # sturdy, the default
+bash cct.sh --native      # light, experimental
 bash cct.sh --extras      # also install node, python, openssh, jq
 bash cct.sh --native --update
 bash cct.sh --rollback    # go back to the previous build
@@ -99,6 +100,10 @@ Removes the launchers and the patched binary. Add `--all` to also delete `~/.cla
 **`CANNOT LINK EXECUTABLE` / `library "libc.so.6" not found`** — the glibc layer is missing or the wrapper was bypassed. Run `pkg install glibc-runner` and re-run the installer. Always start it as `claude`, never by calling the binary in `$PREFIX/opt/claude-code/` directly.
 
 **`patchelf could not rewrite the interpreter` / `cannot locate symbol "_ZNSt6__ndk1..."` referenced by patchelf** — Termux packages are half upgraded: patchelf is newer than the libc++ it needs. The installer now upgrades libc++ (and then every package) by itself; by hand it is `pkg upgrade -y`, then re-run the installer. The binary already downloaded is reused.
+
+**`Segmentation fault` when starting `claude`** — the native build installed but does not run on this phone. Switch to the proven path: `bash cct.sh --proot`. It replaces the `claude` command; the unused native build can be removed with `rm -rf $PREFIX/opt/claude-code/versions`.
+
+**`c`: No command c found** right after installing — the alias is only read by new sessions. Open a new Termux session, or run `source ~/.bashrc`.
 
 **`Killed` partway through** — Android's low-memory killer. Close other apps, avoid running the installer from inside a Claude session, and try again.
 

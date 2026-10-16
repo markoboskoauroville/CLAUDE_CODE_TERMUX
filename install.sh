@@ -6,8 +6,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/markoboskoauroville/CLAUDE_CODE_TERMUX/main/install.sh | bash
 #
 # Flags:
-#   --native      patched linux-arm64 binary on Termux glibc  (~600 MB)
-#   --proot       official installer inside Ubuntu via proot   (~2.5 GB)
+#   --native      EXPERIMENTAL: patched linux-arm64 binary on Termux glibc (~600 MB)
+#   --proot       official installer inside Ubuntu via proot (~2.5 GB), the default
 #   --update      re-fetch and re-install
 #   --extras      also install node, python, openssh
 #   --yes         take every default, ask nothing
@@ -301,7 +301,7 @@ dependency_table() {
       missing=$((missing+1))
     fi
   done
-  if [ "$MODE" = "native" ] || [ -z "$MODE" ]; then
+  if [ "$MODE" = "native" ]; then
     for name in patchelf grun; do
       if command -v "$name" >/dev/null 2>&1; then
         printf '        %-22s %sok%s       %s\n' "$name" "$GREEN" "$OFF" "present"
@@ -325,28 +325,32 @@ choose_mode() {
   step "Choosing the install"
   if [ -n "$MODE" ]; then ok "mode $MODE, from the command line"; return 0; fi
   if [ ! -t 0 ] || [ "$ASSUME_YES" = "1" ]; then
-    MODE="native"
-    ok "mode native, the lighter one, since there is no terminal to ask on"
-    note "run with --proot for the Ubuntu install instead"
+    # proot is the path measured working on a phone (edition 6 onward). The
+    # native binary installed cleanly on a Nothing Phone (2a), 16.10.2026, and
+    # then died with "Segmentation fault" on start, so it is opt-in only.
+    MODE="proot"
+    ok "mode proot, the one proven on a phone, since there is no terminal to ask on"
+    note "run with --native for the lighter, experimental install instead"
     return 0
   fi
   cat <<'MENU'
 
-        1  native   The official linux-arm64 binary, its ELF interpreter
-                    repointed at Termux glibc. About 600 MB, starts fast,
-                    uses your Termux packages. It rests on a compatibility
-                    shim, so an upstream change can need a new edition here.
-
-        2  proot    Anthropic's own installer inside an Ubuntu rootfs.
+        1  proot    Anthropic's own installer inside an Ubuntu rootfs.
                     About 2500 MB, a second or two slower to start, and a
                     real glibc userland, so it behaves like Linux.
+                    Proven on a phone. The default.
+
+        2  native   EXPERIMENTAL. The official linux-arm64 binary, its ELF
+                    interpreter repointed at Termux glibc. About 600 MB.
+                    It installs, but has crashed on start on a real phone
+                    with "Segmentation fault".
 
 MENU
   local reply
   read -r -p "        Choose 1 or 2 [1]: " reply || reply=1
   case "${reply:-1}" in
-    1|native|"") MODE="native" ;;
-    2|proot)     MODE="proot" ;;
+    1|proot|"")  MODE="proot" ;;
+    2|native)    MODE="native" ;;
     *) die "not an option: $reply" ;;
   esac
   ok "mode $MODE"
@@ -717,6 +721,10 @@ verify() {
   fi
   bad "claude --version exited $rc"
   printf '        %s| %s%s\n' "$DIM" "$out" "$OFF"
+  if [ "$MODE" = "native" ]; then
+    note "the native build does not start on this phone. The proot install is the"
+    note "one proven on a phone; switch to it with:  bash cct.sh --proot"
+  fi
   note "the Troubleshooting section of the README covers what this means"
   return 1
 }
