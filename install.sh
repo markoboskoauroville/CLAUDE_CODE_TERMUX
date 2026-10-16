@@ -71,7 +71,7 @@ run() {
   printf '        %srunning%s %s\n' "$DIM" "$OFF" "$label"
   local t0 rc
   t0=$(date +%s)
-  "$@" 2>&1 | while IFS= read -r line; do printf '        %s| %s%s\n' "$DIM" "$line" "$OFF"; done
+  "$@" </dev/null 2>&1 | while IFS= read -r line; do printf '        %s| %s%s\n' "$DIM" "$line" "$OFF"; done
   rc=${PIPESTATUS[0]}
   if [ "$rc" -eq 0 ]; then
     ok "$label  ($(( $(date +%s) - t0 ))s)"
@@ -132,10 +132,18 @@ download_bar() {
 # ================================================================= seams ===
 # Everything Android-specific lives here and in the launchers. The rest of the
 # script is ordinary shell, so it can be exercised on any Linux machine.
+# DEBIAN_FRONTEND=noninteractive does not answer dpkg's configuration-file
+# question. A fresh Termux bootstrap ships openssl.cnf unregistered, so the
+# first openssl upgrade asks "What would you like to do about it?" and waits
+# for a key nobody presses. Measured in the cloud emulator, 16.10.2026: 30
+# minutes stuck. These two options keep the file that is there, silently.
+DPKG_KEEP=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
 pkg_refresh() { run "apt-get update" env DEBIAN_FRONTEND=noninteractive apt-get update -y; }
-pkg_add()     { local what="$*"; run "apt-get install $what" env DEBIAN_FRONTEND=noninteractive apt-get install -y $what; }
-pkg_upgrade() { run "apt-get upgrade" env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
-                  -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold; }
+pkg_add()     { local what="$*"; run "apt-get install $what" env DEBIAN_FRONTEND=noninteractive apt-get install -y "${DPKG_KEEP[@]}" $what; }
+pkg_upgrade() { run "apt-get upgrade" env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y "${DPKG_KEEP[@]}"; }
+# A run stopped at that question leaves dpkg half done, and every apt-get
+# after it refuses with "dpkg was interrupted". Finish that first.
+pkg_finish()  { run "dpkg --configure -a" env DEBIAN_FRONTEND=noninteractive dpkg --configure -a --force-confdef --force-confold; }
 
 # A freshly installed package can be newer than the libraries already on the
 # phone. apt leaves an older libc++ in place when its version still satisfies
@@ -359,6 +367,7 @@ MENU
 packages() {
   step "Installing Termux packages"
   note "apt output follows; lines scrolling past means it is working"
+  pkg_finish || note "dpkg could not finish an earlier interrupted install"
   pkg_refresh || note "apt-get update was unhappy. Carrying on, the mirrors may be stale"
   pkg_add curl ca-certificates git which coreutils grep sed tar || die "the base packages failed"
   pkg_add ripgrep || note "ripgrep is unavailable here, Claude Code will use its own"

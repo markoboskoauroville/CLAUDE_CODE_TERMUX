@@ -79,6 +79,28 @@ export PATH="$STUBS:$PATH"
 
 install_run() { bash "$HERE/../install.sh" --native --yes "$@" >"$WORK/out.log" 2>&1; echo $?; }
 
+# ================================================== CONFFILE QUESTION ======
+# dpkg's "What would you like to do about it?" on openssl.cnf hung a fresh
+# Termux for 30 minutes in the cloud emulator, 16.10.2026. This apt-get
+# stands in for it: any install or upgrade without --force-confold waits on
+# stdin, the way dpkg does, and fails if stdin answers nothing.
+ASK="$WORK/ask"; mkdir -p "$ASK"
+cat > "$ASK/apt-get" <<'S'
+#!/bin/bash
+case " $* " in
+  *" install "*|*" upgrade "*)
+    case " $* " in *force-confold*) exit 0 ;; esac
+    echo "Configuration file 'openssl.cnf' ==> What would you like to do about it ?"
+    read -r -t 5 answer || { echo "prompt left unanswered"; exit 1; } ;;
+esac
+exit 0
+S
+chmod +x "$ASK/apt-get"
+fresh_env
+PATH="$ASK:$PATH" install_run >/dev/null
+assert_contains "apt installs pass --force-confold, so dpkg never asks" "interpreter patched" "$(cat "$WORK/out.log")"
+assert_ok "and no install reached the question" bash -c '! grep -q "What would you like" "$WORK/out.log"'
+
 # ===================================================== STALE LIBRARY ======
 # patchelf newer than the phone's libc++: it will not even start until apt
 # upgrades libc++. The exact message from a phone, 16.10.2026.
