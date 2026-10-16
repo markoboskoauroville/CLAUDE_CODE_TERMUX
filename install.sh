@@ -589,6 +589,8 @@ install_proot() {
   run "claude install inside $DISTRO" proot-distro login "$DISTRO" --termux-home -- bash -lc '
     set -eo pipefail
     export DEBIAN_FRONTEND=noninteractive
+    # Android can kill Termux mid-install; the next run must finish that first.
+    dpkg --configure -a --force-confdef --force-confold
     apt-get update -y
     apt-get install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
       curl ca-certificates git ripgrep less

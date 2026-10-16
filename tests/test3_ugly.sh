@@ -145,7 +145,8 @@ esac
 exit 0
 S
 printf '#!/bin/bash\nexit 0\n' > "$PL/bin/apt-get"
-chmod +x "$PL/proot-distro" "$PL/bin/curl" "$PL/bin/apt-get"
+printf '#!/bin/bash\nexit 0\n' > "$PL/bin/dpkg"
+chmod +x "$PL/proot-distro" "$PL/bin/curl" "$PL/bin/apt-get" "$PL/bin/dpkg"
 fresh_env
 mkdir -p "$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs/etc"
 RC=$(PATH="$PL:$PATH" install_run --proot)
