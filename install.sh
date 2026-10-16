@@ -134,6 +134,28 @@ download_bar() {
 # script is ordinary shell, so it can be exercised on any Linux machine.
 pkg_refresh() { run "apt-get update" env DEBIAN_FRONTEND=noninteractive apt-get update -y; }
 pkg_add()     { local what="$*"; run "apt-get install $what" env DEBIAN_FRONTEND=noninteractive apt-get install -y $what; }
+pkg_upgrade() { run "apt-get upgrade" env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
+                  -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold; }
+
+# A freshly installed package can be newer than the libraries already on the
+# phone. apt leaves an older libc++ in place when its version still satisfies
+# the declared dependency, and the new binary then dies at load with
+# CANNOT LINK EXECUTABLE ... cannot locate symbol. Seen with patchelf on a
+# phone, 16.10.2026. Termux does not support partial upgrades, so bring the
+# library level first, then everything, and only then give up.
+tool_starts() {
+  local name="$1" err
+  err="$("$name" --version 2>&1 >/dev/null)" && return 0
+  note "$name is installed but will not start:"
+  printf '%s\n' "$err" | head -3 | sed 's/^/        | /'
+  info "upgrading libc++, which a newer $name usually needs"
+  pkg_add libc++ || true
+  "$name" --version >/dev/null 2>&1 && { ok "$name starts now"; return 0; }
+  info "bringing every Termux package up to date, which Termux expects anyway"
+  pkg_upgrade || true
+  "$name" --version >/dev/null 2>&1 && { ok "$name starts now"; return 0; }
+  die "$name will not start even after upgrading. Run: pkg upgrade -y && pkg install --reinstall $name  then run this installer again"
+}
 
 # ============================================================== mechanism ===
 # Pure functions. No network, no package manager, no Android.
@@ -347,6 +369,7 @@ install_native() {
   pkg_add tur-repo || note "tur-repo may already be enabled"
   pkg_refresh || true
   pkg_add glibc-runner patchelf || die "glibc-runner or patchelf would not install"
+  tool_starts patchelf
 
   local ld="" c
   for c in "$PREFIX/glibc/lib/ld-linux-aarch64.so.1" "$PREFIX/opt/glibc/lib/ld-linux-aarch64.so.1"; do
