@@ -530,9 +530,14 @@ WRAPPER
 # ========================================================== proot install ===
 # Is the rootfs actually on disk? proot-distro's own listing command changes
 # between versions; the directory does not.
+# proot-distro 4 keeps the rootfs in installed-rootfs/<name>; the Python
+# rewrite keeps it in containers/<name>/rootfs and has no "list --installed"
+# (it prints "unrecognized option" and the usage). Measured in the cloud
+# emulator, 16.10.2026. The directory on disk is the fact for both.
 distro_present() {
-  [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO" ] && return 0
-  proot-distro list --installed 2>/dev/null | grep -q "$DISTRO" && return 0
+  local base="$PREFIX/var/lib/proot-distro"
+  [ -d "$base/installed-rootfs/$DISTRO/etc" ] && return 0
+  [ -d "$base/containers/$DISTRO/rootfs/etc" ] && return 0
   return 1
 }
 

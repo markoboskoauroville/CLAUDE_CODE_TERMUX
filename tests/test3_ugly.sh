@@ -112,7 +112,7 @@ case "\$1" in
   install)
     case " \$* " in
       *" mirror.gcr.io/library/ubuntu:latest "*)
-        mkdir -p "\$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"; exit 0 ;;
+        mkdir -p "\$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/etc"; exit 0 ;;
       *) echo "[!] Failed to install: Network error: HTTP Error 429: Too Many Requests"; exit 1 ;;
     esac ;;
   list) exit 0 ;;
@@ -367,7 +367,7 @@ esac
 exit 0
 S
 chmod +x "$PD"
-mkdir -p "$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"
+mkdir -p "$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/etc"
 bash "$HERE/../install.sh" --proot --yes >"$WORK/proot.log" 2>&1
 # The sandbox has no $PREFIX/bin/bash, so the final verify cannot succeed here
 # and the exit code says nothing. What matters is that the run got PAST the
@@ -377,6 +377,13 @@ assert_not_contains "an already-installed rootfs does not stop the install" \
 assert_contains "and it says the rootfs is already there" "already here" "$(cat "$WORK/proot.log")"
 assert_contains "and it carried on to write the commands" "Writing the commands" "$(cat "$WORK/proot.log")"
 assert_ok "the launcher was written" test -x "$PREFIX/bin/claude"
+
+# The Python proot-distro keeps the rootfs in containers/<name>/rootfs and has
+# no "list --installed". Measured in the cloud emulator, 16.10.2026.
+fresh_env
+mkdir -p "$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs/etc"
+bash "$HERE/../install.sh" --proot --yes >"$WORK/proot2.log" 2>&1
+assert_contains "the new rootfs layout is recognised as already here" "already here" "$(cat "$WORK/proot2.log")"
 
 # and when the listing is silent AND the directory is missing, a real failure
 # must still stop it
