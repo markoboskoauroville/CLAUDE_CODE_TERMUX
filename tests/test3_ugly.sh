@@ -127,6 +127,32 @@ assert_contains "Docker Hub refusing: the mirror is tried" "mirror.gcr.io/librar
 assert_contains "and it is installed under the usual name" "--name ubuntu" "$(cat "$WORK/pd.log")"
 assert_ok "and the install goes on past the rootfs" bash -c "! grep -q 'rootfs did not install' '$WORK/out.log'"
 
+# ============================================ CLAUDE DOWNLOAD FAILS IN UBUNTU
+# "curl | bash" hid curl's failure: the cloud emulator could not reach
+# downloads.claude.ai and step 7 still said ok, 16.10.2026. This proot-distro
+# runs the step's real script, with a curl that cannot resolve the host.
+PL="$WORK/pl"; mkdir -p "$PL/bin" "$WORK/plhome"
+cat > "$PL/bin/curl" <<'S'
+#!/bin/bash
+echo "curl: (6) Could not resolve host: downloads.claude.ai" >&2; exit 6
+S
+cat > "$PL/proot-distro" <<S
+#!/bin/bash
+case "\$1" in
+  login) while [ "\$1" != "--" ]; do shift; done; shift
+         HOME="$WORK/plhome" PATH="$PL/bin:$STUBS:/usr/bin:/bin" exec "\$@" ;;
+esac
+exit 0
+S
+printf '#!/bin/bash\nexit 0\n' > "$PL/bin/apt-get"
+chmod +x "$PL/proot-distro" "$PL/bin/curl" "$PL/bin/apt-get"
+fresh_env
+mkdir -p "$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs/etc"
+RC=$(PATH="$PL:$PATH" install_run --proot)
+assert_eq "a failed Claude Code download inside Ubuntu stops the install" "1" "$RC"
+assert_contains "and says the install inside did not finish" "did not finish" "$(cat "$WORK/out.log")"
+assert_ok "and no launcher claims it worked" test ! -e "$PREFIX/bin/claude"
+
 # ===================================================== STALE LIBRARY ======
 # patchelf newer than the phone's libc++: it will not even start until apt
 # upgrades libc++. The exact message from a phone, 16.10.2026.

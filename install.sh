@@ -587,13 +587,20 @@ install_proot() {
   step "Installing Claude Code inside $DISTRO"
   info "Anthropic's own installer runs in there and its output follows"
   run "claude install inside $DISTRO" proot-distro login "$DISTRO" --termux-home -- bash -lc '
-    set -e
+    set -eo pipefail
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y
-    apt-get install -y curl ca-certificates git ripgrep less
-    curl -fsSL --connect-timeout 20 --max-time 900 https://claude.ai/install.sh | bash
+    apt-get install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+      curl ca-certificates git ripgrep less
+    # Download first, run second. "curl | bash" reports bash'"'"'s exit code, and
+    # bash given nothing exits 0: in the cloud emulator, 16.10.2026, curl
+    # could not reach downloads.claude.ai and this step still said ok.
+    curl -fsSL --connect-timeout 20 --max-time 900 https://claude.ai/install.sh -o /tmp/claude-install.sh
+    bash /tmp/claude-install.sh
+    rm -f /tmp/claude-install.sh
     grep -q ".local/bin" "$HOME/.bashrc" 2>/dev/null || \
       echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$HOME/.bashrc"
+    "$HOME/.local/bin/claude" --version
   ' || die "the install inside $DISTRO did not finish"
 
   mkdir -p "$OPT_DIR"
