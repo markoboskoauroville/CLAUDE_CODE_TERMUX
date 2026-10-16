@@ -154,6 +154,23 @@ assert_eq "a failed Claude Code download inside Ubuntu stops the install" "1" "$
 assert_contains "and says the install inside did not finish" "did not finish" "$(cat "$WORK/out.log")"
 assert_ok "and no launcher claims it worked" test ! -e "$PREFIX/bin/claude"
 
+# ======================================================= LAUNCHER BIND ======
+# The Python proot-distro already shows the Termux home at its real path;
+# binding a directory inside it again warned on every start (cloud emulator,
+# 16.10.2026). Outside the home, or with proot-distro 4, the bind is needed.
+fresh_env
+LB="$WORK/lb"; mkdir -p "$LB" "$HOME/proj" "$WORK/outside"
+printf '#!/bin/bash\nprintf "%%s\\n" "$@" > "%s/args"\n' "$LB" > "$LB/proot-distro"; chmod +x "$LB/proot-distro"
+CCT_SOURCE_ONLY=1 bash -c '. "'"$HERE"'/../install.sh"; BIN_DIR="$PREFIX/bin"; write_launcher_proot' >/dev/null 2>&1
+mkdir -p "$PREFIX/var/lib/proot-distro/containers"
+( cd "$HOME/proj" && PATH="$LB:$PATH" bash "$PREFIX/bin/claude" )
+assert_ok "inside the home, new proot-distro: no second bind" bash -c "! grep -q -- '--bind' '$LB/args'"
+( cd "$WORK/outside" && PATH="$LB:$PATH" bash "$PREFIX/bin/claude" )
+assert_contains "outside the home: the directory is bound" "$WORK/outside:$WORK/outside" "$(cat "$LB/args")"
+rmdir "$PREFIX/var/lib/proot-distro/containers"
+( cd "$HOME/proj" && PATH="$LB:$PATH" bash "$PREFIX/bin/claude" )
+assert_contains "inside the home, proot-distro 4: the directory is bound" "$HOME/proj:$HOME/proj" "$(cat "$LB/args")"
+
 # ===================================================== STALE LIBRARY ======
 # patchelf newer than the phone's libc++: it will not even start until apt
 # upgrades libc++. The exact message from a phone, 16.10.2026.

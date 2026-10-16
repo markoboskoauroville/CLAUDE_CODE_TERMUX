@@ -631,8 +631,15 @@ unset LD_PRELOAD
 CCT_CWD="\$(pwd -P)"
 
 # Bind the directory into the container at the same absolute path, then change
-# into it before starting. Binding a path to itself is harmless when it already
-# sits inside the Termux home that --termux-home mounts.
+# into it before starting. The Python proot-distro (containers/ layout) already
+# shows the Termux home at its real path, and binding a directory inside it
+# again prints "binding ... overlaps with an existing one" on every start
+# (cloud emulator, 16.10.2026). proot-distro 4 shows the home only at /root,
+# so there the bind stays.
+CCT_BIND=(--bind "\$CCT_CWD:\$CCT_CWD")
+case "\$CCT_CWD/" in
+  "\$HOME"/*) [ -d "$PREFIX/var/lib/proot-distro/containers" ] && CCT_BIND=() ;;
+esac
 # --messaging-socket-path: without it every start warns "Cross-session
 # messaging is off ... user namespace without a uid mapping". PRoot gives the
 # process no /proc/self/uid_map, so Claude Code cannot verify who owns its
@@ -648,7 +655,7 @@ CCT_CWD="\$(pwd -P)"
 # am answers in about a second; a phone without the command loses nothing.
 command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock 2>/dev/null
 
-exec proot-distro login $DISTRO --termux-home --bind "\$CCT_CWD:\$CCT_CWD" -- \\
+exec proot-distro login $DISTRO --termux-home "\${CCT_BIND[@]}" -- \\
   bash -lc 'export PATH="\$HOME/.local/bin:\$PATH"; cd "\$1" || { echo "cannot enter \$1 inside the container" >&2; exit 1; }; shift; mkdir -p -m 700 "\$HOME/.claude/inbox"; exec claude --messaging-socket-path "\$HOME/.claude/inbox/cc-\$\$.sock" "\$@"' \\
   claude "\$CCT_CWD" "\$@"
 WRAPPER
