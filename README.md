@@ -98,6 +98,8 @@ Removes the launchers and the patched binary. Add `--all` to also delete `~/.cla
 
 **`CANNOT LINK EXECUTABLE` / `library "libc.so.6" not found`** — the glibc layer is missing or the wrapper was bypassed. Run `pkg install glibc-runner` and re-run the installer. Always start it as `claude`, never by calling the binary in `$PREFIX/opt/claude-code/` directly.
 
+**`patchelf could not rewrite the interpreter` / `cannot locate symbol "_ZNSt6__ndk1..."` referenced by patchelf** — Termux packages are half upgraded: patchelf is newer than the libc++ it needs. The installer now upgrades libc++ (and then every package) by itself; by hand it is `pkg upgrade -y`, then re-run the installer. The binary already downloaded is reused.
+
 **`Killed` partway through** — Android's low-memory killer. Close other apps, avoid running the installer from inside a Claude session, and try again.
 
 **Download stalls or "unexpected content" from the CDN** — check the network, and check that Anthropic serves your region: <https://www.anthropic.com/supported-countries>

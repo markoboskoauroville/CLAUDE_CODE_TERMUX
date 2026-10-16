@@ -79,6 +79,41 @@ export PATH="$STUBS:$PATH"
 
 install_run() { bash "$HERE/../install.sh" --native --yes "$@" >"$WORK/out.log" 2>&1; echo $?; }
 
+# ===================================================== STALE LIBRARY ======
+# patchelf newer than the phone's libc++: it will not even start until apt
+# upgrades libc++. The exact message from a phone, 16.10.2026.
+REAL_PATCHELF="$(command -v patchelf)"
+STALE="$WORK/stale"; mkdir -p "$STALE"
+cat > "$STALE/patchelf" <<S
+#!/bin/bash
+if [ ! -e "$WORK/libcxx-upgraded" ]; then
+  echo 'CANNOT LINK EXECUTABLE "patchelf": cannot locate symbol "_ZNSt6__ndk113__hash_memoryEPKvm"' >&2
+  exit 1
+fi
+exec "$REAL_PATCHELF" "\$@"
+S
+cat > "$STALE/apt-get" <<S
+#!/bin/bash
+case " \$* " in *" libc++ "*) touch "$WORK/libcxx-upgraded" ;; esac
+exit 0
+S
+chmod +x "$STALE/patchelf" "$STALE/apt-get"
+
+fresh_env; rm -f "$WORK/libcxx-upgraded"
+PATH="$STALE:$PATH" install_run >/dev/null
+assert_contains "a patchelf that cannot link is healed by upgrading libc++" "interpreter patched" "$(cat "$WORK/out.log")"
+assert_contains "and the link error is shown" "cannot locate symbol" "$(cat "$WORK/out.log")"
+assert_contains "and it says patchelf starts now" "patchelf starts now" "$(cat "$WORK/out.log")"
+assert_ok "and claude was installed" test -x "$PREFIX/bin/claude"
+
+# libc++ never arrives: stop with the command that fixes it by hand
+sed -i 's/touch/: touch/' "$STALE/apt-get"
+fresh_env; rm -f "$WORK/libcxx-upgraded"
+RC=$(PATH="$STALE:$PATH" install_run)
+assert_eq "a patchelf that stays broken stops the install" "1" "$RC"
+assert_contains "and names the fix" "pkg upgrade" "$(cat "$WORK/out.log")"
+assert_ok "and nothing was installed" test ! -e "$PREFIX/bin/claude"
+
 # ============================================================== ABSENT ======
 fresh_env
 CCT_CDN="http://127.0.0.1:1" RC=$(CCT_CDN="http://127.0.0.1:1" install_run)
