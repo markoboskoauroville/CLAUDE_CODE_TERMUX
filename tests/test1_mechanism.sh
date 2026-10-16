@@ -224,4 +224,14 @@ assert_contains "a total of 0 does not divide by zero" "  0%" "$(draw_bar 0 0 x)
 assert_contains "overshooting clamps at 100 percent" "100%" "$(draw_bar 300 100 x)"
 assert_contains "megabytes are shown, not bytes" "1/2 MB" "$(draw_bar 1048576 2097152 x)"
 
+# --------------------------------------------------------- choose_mode -----
+# With nothing to ask on, the default is proot: the path proven on a phone.
+# native installed and then segfaulted on a Nothing Phone (2a), 16.10.2026.
+assert_eq "--yes with no mode picks proot" "proot" \
+  "$(MODE=""; ASSUME_YES=1; STEP=0; choose_mode >/dev/null; echo "$MODE")"
+assert_eq "--native on the command line is still honoured" "native" \
+  "$(MODE="native"; ASSUME_YES=1; STEP=0; choose_mode >/dev/null; echo "$MODE")"
+assert_eq "no terminal on stdin (curl | bash) picks proot" "proot" \
+  "$(MODE=""; ASSUME_YES=0; STEP=0; choose_mode </dev/null >/dev/null 2>&1; echo "$MODE")"
+
 t_summary "TEST 1"
