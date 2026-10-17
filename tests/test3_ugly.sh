@@ -188,16 +188,18 @@ cat > "$PQ/proot-distro" <<S
 #!/bin/bash
 case "\$1" in
   login) while [ "\$1" != "--" ]; do shift; done; shift
-         CCT_BEAT=1 HOME="$WORK/pqhome" PATH="$PQ/bin:$PL/bin:/usr/bin:/bin" exec "\$@" ;;
+         PATH="$PQ/bin:$PL/bin:/usr/bin:/bin" exec "\$@" ;;
 esac
 exit 0
 S
 chmod +x "$PQ/proot-distro" "$PQ/bin/curl"
 fresh_env
 mkdir -p "$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs/etc"
-PATH="$PQ:$PATH" install_run --proot >/dev/null
-assert_contains "the quiet download is announced" "prints nothing until it is done" "$(cat "$WORK/out.log")"
-assert_contains "and progress is printed while it runs" "still installing Claude Code" "$(cat "$WORK/out.log")"
+CCT_BEAT=1 PATH="$PQ:$PATH" install_run --proot >/dev/null
+assert_contains "the quiet download is announced" "the bar below is the download" "$(cat "$WORK/out.log")"
+assert_contains "and progress is printed while it runs" "still claude install inside ubuntu" "$(cat "$WORK/out.log")"
+assert_contains "with the megabytes that arrived" " MB" "$(grep 'still claude install' "$WORK/out.log" | tail -1)"
+assert_contains "and a speed" "/s" "$(grep 'still claude install' "$WORK/out.log" | tail -1)"
 assert_contains "and the step still ends with the installed version" "9.9.9 (Claude Code)" "$(cat "$WORK/out.log")"
 
 # ===================================================== STALE LIBRARY ======

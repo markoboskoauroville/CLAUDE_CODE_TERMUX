@@ -65,66 +65,222 @@ bad()  { printf '        %sno%s    %s\n' "$RED" "$OFF" "$*"; }
 note() { printf '        %s%s%s\n' "$DIM" "$*" "$OFF"; }
 die()  { printf '\n%sStopped:%s %s\n\n' "$RED" "$OFF" "$*" >&2; exit 1; }
 
-# Stream a command's output indented, so a long install never looks stalled.
+# -------------------------------------------------------------- progress ---
+# Marko, 17.10.2026: "I love Braille spinners. As many as possible, progress
+# bars like in Midnight Commander, and speed monitors." A screen that does not
+# move looks broken (a phone sat on apt's last line for minutes while Claude
+# Code downloaded in silence), so every wait in this installer moves: a Braille
+# spinner, the time, and wherever bytes can be counted, a bar, MB/s and ETA.
+# On a terminal that cannot show them (no UTF-8) the same in ASCII; in a log
+# (no terminal) plain lines, a few per minute, never control characters.
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+  *UTF-8*|*utf8*|*UTF8*|*utf-8*) CCT_UTF8=1 ;;
+  *) CCT_UTF8=0 ;;
+esac
+if [ "$TTY" = "1" ] && [ "$CCT_UTF8" = "1" ]; then
+  SPIN=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏); BAR_ON="█"; BAR_OFF="░"; DONE_MARK="✓"
+elif [ "$TTY" = "1" ]; then
+  SPIN=('|' '/' '-' '\'); BAR_ON="#"; BAR_OFF="."; DONE_MARK="+"
+else
+  SPIN=('|' '/' '-' '\'); BAR_ON="#"; BAR_OFF="."; DONE_MARK="+"
+fi
+# The terminal's width, so a status line never wraps: a wrapped line cannot be
+# redrawn in place and every update would pile up as a new line. A phone in
+# portrait is about 50 columns.
+term_cols() {
+  local c
+  c=$(stty size 2>/dev/null </dev/tty | cut -d' ' -f2)
+  [[ "$c" =~ ^[0-9]+$ ]] && [ "$c" -gt 20 ] || c=${COLUMNS:-80}
+  printf '%s' "$c"
+}
+COLS=$(term_cols)
+BEAT="${CCT_BEAT:-20}"          # seconds between progress lines in a log
+
+# 4.2 MB/s, 830 KB/s, 12 B/s
+fmt_rate() {
+  local b="${1:-0}"
+  if   [ "$b" -ge 1048576 ]; then printf '%d.%d MB/s' $(( b / 1048576 )) $(( (b % 1048576) * 10 / 1048576 ))
+  elif [ "$b" -ge 1024 ];    then printf '%d KB/s' $(( b / 1024 ))
+  else printf '%d B/s' "$b"; fi
+}
+# 0:42, 12:05, 1:02:03
+fmt_eta() {
+  local t="${1:-0}"
+  if [ "$t" -ge 3600 ]; then printf '%d:%02d:%02d' $(( t / 3600 )) $(( t % 3600 / 60 )) $(( t % 60 ))
+  else printf '%d:%02d' $(( t / 60 )) $(( t % 60 )); fi
+}
+# Bytes under a path, 0 when it is not there yet.
+bytes_in() { du -sb "$1" 2>/dev/null | cut -f1 | grep -E '^[0-9]+$' || echo 0; }
+
+# draw_bar NOW TOTAL LABEL [BYTES_PER_SECOND] [SPINNER]
+# Midnight Commander's copy dialog in one line:
+#   ⠹ [███████████░░░░░░░░░░░]  52%  120/230 MB  4.2 MB/s  ETA 0:26  claude 2.1.301
+# On a terminal the bar stretches or shrinks to the width and the label goes
+# first when it does not fit. A total of 0 means unknown: what is on disk and
+# how fast, no bar.
+draw_bar() {
+  local now="$1" total="$2" label="$3" rate="${4:-}" spin="${5:-}"
+  local width=22 pct=0 filled i bar="" mb_now mb_tot info="" room sep="  "
+  # a phone in portrait: single spaces, so the bar keeps some length
+  [ "$TTY" = "1" ] && [ "${COLS:-80}" -lt 70 ] && sep=" "
+  mb_now=$(( now / 1048576 )); mb_tot=$(( total / 1048576 ))
+  if [ "$total" -gt 0 ]; then
+    pct=$(( now * 100 / total )); [ "$pct" -gt 100 ] && pct=100; [ "$pct" -lt 0 ] && pct=0
+    info="$(printf '%3d%%%s%s/%s MB' "$pct" "$sep" "$mb_now" "$mb_tot")"
+  else
+    info="$mb_now MB"
+  fi
+  if [ -n "$rate" ]; then
+    info="$info$sep$(fmt_rate "$rate")"
+    [ "$total" -gt 0 ] && [ "$rate" -gt 0 ] && [ "$now" -lt "$total" ] && \
+      info="$info${sep}ETA $(fmt_eta $(( (total - now) / rate )))"
+  fi
+  if [ "$TTY" = "1" ]; then
+    # 2 indent + spinner + space, [bar], space, info: whatever is left is the label's
+    if [ "$total" -gt 0 ]; then
+      width=$(( COLS - 4 - 3 - ${#info} - 1 ))
+      [ "$width" -gt 30 ] && width=30
+      [ "$width" -lt 6 ] && width=6
+    fi
+    room=$(( COLS - 4 - ${#info} - 2 ))
+    [ "$total" -gt 0 ] && room=$(( room - width - 3 ))
+    [ "$room" -gt 3 ] && [ "${#label}" -gt "$room" ] && label="${label:0:$((room - 1))}…"
+    [ "$room" -le 3 ] && label=""
+  fi
+  if [ "$total" -gt 0 ]; then
+    filled=$(( pct * width / 100 ))
+    for ((i=0; i<width; i++)); do
+      if [ "$i" -lt "$filled" ]; then bar="$bar$BAR_ON"; else bar="$bar$BAR_OFF"; fi
+    done
+  fi
+  if [ "$TTY" = "1" ]; then
+    [ -n "$label" ] && label="  $label"
+    if [ -n "$bar" ]; then
+      printf '\r\033[K  %s%s%s [%s%s%s] %s%s%s%s' "$AMBER" "${spin:-${SPIN[0]}}" "$OFF" \
+        "$AMBER" "$bar" "$OFF" "$info" "$DIM" "$label" "$OFF"
+    else
+      printf '\r\033[K  %s%s%s %s%s%s%s' "$AMBER" "${spin:-${SPIN[0]}}" "$OFF" "$info" "$DIM" "$label" "$OFF"
+    fi
+  else
+    if [ -n "$bar" ]; then
+      printf '        [%s] %s  %s\n' "$bar" "$info" "$label"
+    else
+      printf '        %s  %s\n' "$info" "$label"
+    fi
+  fi
+}
+
+# A speed monitor: call rate_sample BYTES each tick; RATE holds bytes per second,
+# smoothed over the last few seconds so the number does not jump about.
+RATE=0; RATE_LAST_B=-1; RATE_LAST_T=0
+rate_reset()  { RATE=0; RATE_LAST_B=-1; RATE_LAST_T=0; }
+rate_sample() {
+  local b="$1" t inst
+  t=$(date +%s)
+  if [ "$RATE_LAST_B" -lt 0 ]; then RATE_LAST_B=$b; RATE_LAST_T=$t; return; fi
+  [ "$t" -gt "$RATE_LAST_T" ] || return
+  inst=$(( (b - RATE_LAST_B) / (t - RATE_LAST_T) )); [ "$inst" -lt 0 ] && inst=0
+  if [ "$RATE" -eq 0 ]; then RATE=$inst; else RATE=$(( (RATE * 2 + inst) / 3 )); fi
+  RATE_LAST_B=$b; RATE_LAST_T=$t
+}
+
+# run LABEL CMD...  Streams the command's output indented, with a Braille
+# spinner and the time on the bottom line while it works. Two optional
+# settings, for the steps that download:
+#   RUN_WATCH=path   count the bytes arriving there: MB, MB/s, and with
+#   RUN_TOTAL=bytes  a bar and an ETA as well.
+# The full output stays in $RUN_LOG until the next run.
+RUN_LOG=""
 run() {
   local label="$1"; shift
   printf '        %srunning%s %s\n' "$DIM" "$OFF" "$label"
-  local t0 rc
-  t0=$(date +%s)
-  "$@" </dev/null 2>&1 | while IFS= read -r line; do printf '        %s| %s%s\n' "$DIM" "$line" "$OFF"; done
-  rc=${PIPESTATUS[0]}
+  [ -n "$RUN_LOG" ] && rm -f "$RUN_LOG"
+  RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/cct-run.XXXXXX")"
+  local t0 rc pid n=0 total_lines i=0 base=0 now=0 last_beat lines
+  local watch="${RUN_WATCH:-}" want="${RUN_TOTAL:-0}"
+  t0=$(date +%s); last_beat=$t0
+  [ -n "$watch" ] && base=$(bytes_in "$watch")
+  rate_reset
+  "$@" </dev/null >"$RUN_LOG" 2>&1 &
+  pid=$!
+  _run_flush() {
+    total_lines=$(wc -l < "$RUN_LOG")
+    if [ "$total_lines" -gt "$n" ]; then
+      [ "$TTY" = "1" ] && printf '\r\033[K'
+      sed -n "$((n + 1)),${total_lines}p" "$RUN_LOG" | while IFS= read -r line; do
+        printf '        %s| %s%s\n' "$DIM" "$line" "$OFF"
+      done
+      n=$total_lines
+    fi
+  }
+  while kill -0 "$pid" 2>/dev/null; do
+    _run_flush
+    if [ -n "$watch" ]; then
+      now=$(( $(bytes_in "$watch") - base )); [ "$now" -lt 0 ] && now=0
+      rate_sample "$now"
+    fi
+    if [ "$TTY" = "1" ]; then
+      if [ -n "$watch" ]; then
+        draw_bar "$now" "$want" "$label" "$RATE" "${SPIN[$(( i % ${#SPIN[@]} ))]}"
+      else
+        local secs; secs="$(fmt_eta $(( $(date +%s) - t0 )))"
+        local shown="$label"; [ $(( ${#shown} + ${#secs} + 8 )) -gt "$COLS" ] && shown="${shown:0:$(( COLS - ${#secs} - 9 ))}…"
+        printf '\r\033[K  %s%s%s %s  %s%s%s' "$AMBER" "${SPIN[$(( i % ${#SPIN[@]} ))]}" "$OFF" \
+          "$shown" "$DIM" "$secs" "$OFF"
+      fi
+    elif [ -n "$watch" ] && [ $(( $(date +%s) - last_beat )) -ge "$BEAT" ]; then
+      last_beat=$(date +%s)
+      draw_bar "$now" "$want" "still $label" "$RATE"
+    fi
+    i=$((i + 1))
+    [ $(( i % 25 )) -eq 0 ] && COLS=$(term_cols)   # the phone may have been turned
+    sleep 0.2
+  done
+  wait "$pid"; rc=$?
+  _run_flush
+  # the last partial line, if the command ended without a newline
+  [ -s "$RUN_LOG" ] && [ -n "$(tail -c 1 "$RUN_LOG")" ] && \
+    printf '        %s| %s%s\n' "$DIM" "$(tail -n 1 "$RUN_LOG")" "$OFF"
+  [ "$TTY" = "1" ] && printf '\r\033[K'
   if [ "$rc" -eq 0 ]; then
-    ok "$label  ($(( $(date +%s) - t0 ))s)"
+    if [ -n "$watch" ] && [ "$now" -gt 0 ]; then
+      ok "$label  ($(( $(date +%s) - t0 ))s, $(( now / 1048576 )) MB)"
+    else
+      ok "$label  ($(( $(date +%s) - t0 ))s)"
+    fi
   else
     bad "$label  exit $rc"
   fi
   return "$rc"
 }
 
-# -------------------------------------------------------------- progress ---
-# Draws a bar from a byte count against a known total.
-draw_bar() {
-  local now="$1" total="$2" label="$3"
-  local width=22 pct=0 filled i bar="" mb_now mb_tot
-  [ "$total" -gt 0 ] && pct=$(( now * 100 / total ))
-  [ "$pct" -gt 100 ] && pct=100
-  [ "$pct" -lt 0 ] && pct=0
-  filled=$(( pct * width / 100 ))
-  for ((i=0; i<width; i++)); do
-    if [ "$i" -lt "$filled" ]; then bar="$bar#"; else bar="$bar."; fi
-  done
-  mb_now=$(( now / 1048576 )); mb_tot=$(( total / 1048576 ))
-  if [ "$TTY" = "1" ]; then
-    printf '\r        %s[%s]%s %3d%%  %s/%s MB  %s' \
-      "$AMBER" "$bar" "$OFF" "$pct" "$mb_now" "$mb_tot" "$label"
-  else
-    printf '        [%s] %3d%%  %s/%s MB  %s\n' "$bar" "$pct" "$mb_now" "$mb_tot" "$label"
-  fi
-}
-
 # Download with a live bar. Polls the partial file rather than trusting curl's
 # own meter, so the number on screen is the number of bytes really on disk.
 download_bar() {
   local url="$1" out="$2" total="$3" label="$4"
-  local last_line_at=0 pid rc now t final
+  local last_line_at=0 pid rc now t final i=0
   rm -f "$out"
+  rate_reset
   curl -fsSL --connect-timeout "$NET_CONNECT_TIMEOUT" --max-time "$NET_BIG_TIMEOUT" \
        -o "$out" "$url" &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     now=0
     [ -f "$out" ] && now=$(stat -c %s "$out" 2>/dev/null || echo 0)
+    rate_sample "$now"
     if [ "$TTY" = "1" ]; then
-      draw_bar "$now" "$total" "$label"
+      draw_bar "$now" "$total" "$label" "$RATE" "${SPIN[$(( i % ${#SPIN[@]} ))]}"
+      sleep 0.2
     else
       t=$(date +%s)
-      if [ $(( t - last_line_at )) -ge 10 ]; then draw_bar "$now" "$total" "$label"; last_line_at=$t; fi
+      if [ $(( t - last_line_at )) -ge 10 ]; then draw_bar "$now" "$total" "$label" "$RATE"; last_line_at=$t; fi
+      sleep 1
     fi
-    sleep 1
+    i=$((i + 1))
   done
   wait "$pid"; rc=$?
   final=0; [ -f "$out" ] && final=$(stat -c %s "$out" 2>/dev/null || echo 0)
-  draw_bar "$final" "$total" "$label"
+  draw_bar "$final" "$total" "$label" "$RATE" "$DONE_MARK"
   [ "$TTY" = "1" ] && printf '\n'
   return "$rc"
 }
@@ -170,17 +326,17 @@ tool_starts() {
 
 # Reads the linux-arm64 checksum or size out of a manifest on stdin.
 manifest_field() {
-  local field="$1"
+  local field="$1" plat="${2:-linux-arm64}"
   if command -v python3 >/dev/null 2>&1; then
     python3 -c 'import json,sys
 try:
     d=json.load(sys.stdin)
-    print(d["platforms"]["linux-arm64"].get(sys.argv[1],""))
+    print(d["platforms"][sys.argv[2]].get(sys.argv[1],""))
 except Exception:
-    pass' "$field"
+    pass' "$field" "$plat"
   else
     tr -d '\n\r\t' \
-      | grep -o '"linux-arm64"[[:space:]]*:[[:space:]]*{[^{}]*}' \
+      | grep -o "\"$plat\"[[:space:]]*:[[:space:]]*{[^{}]*}" \
       | grep -o "\"$field\"[[:space:]]*:[[:space:]]*\"\?[0-9a-fA-F]*" \
       | sed 's/.*[:"]//'
   fi
@@ -563,12 +719,12 @@ install_proot() {
     local out rc src
     for src in "$DISTRO" "mirror.gcr.io/library/$DISTRO:latest"; do
       if [ "$src" = "$DISTRO" ]; then
-        out="$(proot-distro install "$DISTRO" 2>&1)"; rc=$?
+        RUN_WATCH="$PREFIX/var/lib/proot-distro" run "fetching and unpacking $DISTRO" proot-distro install "$DISTRO"; rc=$?
       else
         info "trying $src instead"
-        out="$(proot-distro install --name "$DISTRO" "$src" 2>&1)"; rc=$?
+        RUN_WATCH="$PREFIX/var/lib/proot-distro" run "fetching and unpacking $DISTRO" proot-distro install --name "$DISTRO" "$src"; rc=$?
       fi
-      printf '%s\n' "$out" | while IFS= read -r l; do printf '        %s| %s%s\n' "$DIM" "$l" "$OFF"; done
+      out="$(cat "$RUN_LOG")"
       [ "$rc" -eq 0 ] && break
       distro_present && break
     done
@@ -586,6 +742,19 @@ install_proot() {
 
   step "Installing Claude Code inside $DISTRO"
   info "Anthropic's own installer runs in there and its output follows"
+  # The size of the build it will fetch, for a bar with an ETA. Unknown is fine:
+  # then MB and MB/s without a bar.
+  local plat="linux-arm64" cc_total=0 cc_ver
+  [ "$(uname -m)" = "x86_64" ] && plat="linux-x64"
+  cc_ver=$(curl -fsSL --connect-timeout "$NET_CONNECT_TIMEOUT" --max-time "$NET_SMALL_TIMEOUT" "$CDN/latest" 2>/dev/null | tr -d '\r\n')
+  if is_version "$cc_ver"; then
+    cc_total=$(curl -fsSL --connect-timeout "$NET_CONNECT_TIMEOUT" --max-time "$NET_SMALL_TIMEOUT" "$CDN/$cc_ver/manifest.json" 2>/dev/null \
+               | manifest_field size "$plat" | tr -d ' \r\n')
+    [[ "$cc_total" =~ ^[0-9]+$ ]] || cc_total=0
+    [ "$cc_total" -gt 0 ] && info "Claude Code $cc_ver, $(( cc_total / 1048576 )) MB for $plat"
+  fi
+  mkdir -p "$HOME/.local/share/claude"
+  RUN_WATCH="$HOME/.local/share/claude" RUN_TOTAL="$cc_total" \
   run "claude install inside $DISTRO" proot-distro login "$DISTRO" --termux-home -- bash -lc '
     set -eo pipefail
     export DEBIAN_FRONTEND=noninteractive
@@ -598,18 +767,12 @@ install_proot() {
     # bash given nothing exits 0: in the cloud emulator, 16.10.2026, curl
     # could not reach downloads.claude.ai and this step still said ok.
     curl -fsSL --connect-timeout 20 --max-time 900 https://claude.ai/install.sh -o /tmp/claude-install.sh
-    # Anthropic'"'"'s installer downloads about 230 MB and prints nothing until it
-    # is done: 8 to 25 minutes of a screen that looks frozen (cloud emulator, and
-    # a phone, 17.10.2026). Say what is on disk every so often.
-    echo "Downloading Claude Code, about 230 MB. It prints nothing until it is done; progress follows."
-    bash /tmp/claude-install.sh &
-    cct_pid=$!
-    while kill -0 "$cct_pid" 2>/dev/null; do
-      sleep "${CCT_BEAT:-20}"
-      kill -0 "$cct_pid" 2>/dev/null || break
-      echo "still installing Claude Code: $(du -sm "$HOME/.local/share/claude" 2>/dev/null | cut -f1 || echo 0) MB so far"
-    done
-    wait "$cct_pid"
+    # Anthropic'"'"'s installer prints nothing while it downloads about 230 MB:
+    # 8 to 25 minutes that looked frozen on a phone (17.10.2026). The bar,
+    # speed and ETA are drawn outside, from the bytes arriving in the Termux
+    # home that --termux-home shares as /root.
+    echo "Downloading Claude Code. Anthropic'"'"'s installer is quiet; the bar below is the download."
+    bash /tmp/claude-install.sh
     rm -f /tmp/claude-install.sh
     grep -q ".local/bin" "$HOME/.bashrc" 2>/dev/null || \
       echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$HOME/.bashrc"

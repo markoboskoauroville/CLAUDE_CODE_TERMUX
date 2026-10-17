@@ -219,10 +219,40 @@ assert_contains "100 of 100 fills the bar"     "[######################]" "$(dra
 assert_contains "100 of 100 reads 100 percent" "100%"                     "$(draw_bar 100 100 x)"
 assert_contains "half draws half"              "[###########...........]" "$(draw_bar 50 100 x)"
 # the boundary that bites: a total of zero must not divide by zero
-assert_contains "a total of 0 does not divide by zero" "  0%" "$(draw_bar 0 0 x)"
+# a total of 0 means the size is unknown: no percentage, and no division by it
+assert_contains "a total of 0 does not divide by zero" "0 MB" "$(draw_bar 0 0 x)"
 # more bytes than the manifest promised must clamp rather than overflow the bar
 assert_contains "overshooting clamps at 100 percent" "100%" "$(draw_bar 300 100 x)"
 assert_contains "megabytes are shown, not bytes" "1/2 MB" "$(draw_bar 1048576 2097152 x)"
+
+# ------------------------------------------------- speed, ETA, spinner -----
+# Marko, 17.10.2026: Braille spinners, Midnight Commander bars, speed monitors.
+assert_eq "4.2 MB/s"  "4.2 MB/s"  "$(fmt_rate 4404224)"
+assert_eq "830 KB/s"  "830 KB/s"  "$(fmt_rate 849920)"
+assert_eq "12 B/s"    "12 B/s"    "$(fmt_rate 12)"
+assert_eq "an ETA under an hour reads m:ss"  "0:26"    "$(fmt_eta 26)"
+assert_eq "an ETA over an hour reads h:mm:ss" "1:02:03" "$(fmt_eta 3723)"
+TTY=0
+B="$(draw_bar 52428800 104857600 claude 2097152)"
+assert_contains "the bar shows the speed"           "2.0 MB/s" "$B"
+assert_contains "and the time left at that speed"   "ETA 0:25" "$B"
+assert_contains "an unknown total shows MB, no bar" "7 MB"     "$(draw_bar 7340032 0 x 1024)"
+assert_not_contains "and no bar at all"            "["        "$(draw_bar 7340032 0 x 1024)"
+assert_not_contains "a log line carries no control characters" $'\033' "$B"
+# On a terminal: Braille, block bars, and never wider than the screen. A phone
+# in portrait is about 50 columns; a wrapped status line cannot be redrawn.
+TTY=1; COLS=50; SPIN=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏); BAR_ON="█"; BAR_OFF="░"
+T="$(LC_ALL=C.UTF-8 draw_bar 52428800 104857600 "claude 2.1.301 for linux-arm64" 2097152 ⠹)"
+assert_contains "the spinner is Braille"            "⠹" "$T"
+assert_contains "the bar is Midnight Commander's"    "█" "$T"
+VIS="$(printf '%s' "$T" | sed $'s/\033\\[[0-9;]*[A-Za-z]//g; s/\r//g')"
+W="$(printf '%s' "$VIS" | python3 -c 'import sys; print(len(sys.stdin.buffer.read().decode("utf-8")))')"
+assert_ok "a status line fits 50 columns ($W)" test "$W" -le 50
+T="$(draw_bar 52428800 104857600 "label" 2097152 ⠹)"; COLS=120
+T2="$(draw_bar 52428800 104857600 "claude 2.1.301 for linux-arm64" 2097152 ⠹)"
+assert_contains "a wide screen keeps the label" "claude 2.1.301 for linux-arm64" "$T2"
+COLS=50
+TTY=0; SPIN=('|' '/' '-' '\'); BAR_ON="#"; BAR_OFF="."
 
 # --------------------------------------------------------- choose_mode -----
 # With nothing to ask on, the default is proot: the path proven on a phone.
