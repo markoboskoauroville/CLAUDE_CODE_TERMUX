@@ -137,6 +137,9 @@ draw_bar() {
   local width=22 pct=0 filled i bar="" mb_now mb_tot info="" room sep="  "
   # a phone in portrait: single spaces, so the bar keeps some length
   [ "$TTY" = "1" ] && [ "${COLS:-80}" -lt 70 ] && sep=" "
+  # A temporary copy beside the final file can make more bytes arrive than the
+  # build has (336/272 MB, recorded 17.10.2026): never show more than the total.
+  [ "$total" -gt 0 ] && [ "$now" -gt "$total" ] && now=$total
   mb_now=$(( now / 1048576 )); mb_tot=$(( total / 1048576 ))
   if [ "$total" -gt 0 ]; then
     pct=$(( now * 100 / total )); [ "$pct" -gt 100 ] && pct=100; [ "$pct" -lt 0 ] && pct=0
@@ -144,15 +147,25 @@ draw_bar() {
   else
     info="$mb_now MB"
   fi
-  if [ -n "$rate" ]; then
+  if [ "$total" -gt 0 ] && [ "$now" -ge "$total" ] && [ -n "$spin" ] && [ "$spin" != "$DONE_MARK" ]; then
+    # Everything has arrived but the command is still working (Claude Code sets
+    # itself up for minutes after its download): a speed falling to 0 B/s
+    # would look stuck, so say what is happening instead.
+    info="$info${sep}setting up"
+  elif [ -n "$rate" ]; then
     info="$info$sep$(fmt_rate "$rate")"
     [ "$total" -gt 0 ] && [ "$rate" -gt 0 ] && [ "$now" -lt "$total" ] && \
       info="$info${sep}ETA $(fmt_eta $(( (total - now) / rate )))"
   fi
   if [ "$TTY" = "1" ]; then
-    # 2 indent + spinner + space, [bar], space, info: whatever is left is the label's
+    # 2 indent + spinner + space, [bar], space, info: whatever is left is the label's.
+    # The bar's width comes from the widest the numbers can get, not from the
+    # numbers now, so it stands still like Midnight Commander's.
+    local widest
+    widest="$(printf '100%%%s%s/%s MB%s999.9 KB/s%sETA 99:99' "$sep" "$mb_tot" "$mb_tot" "$sep" "$sep")"
+    [ "$total" -gt 0 ] && info="$(printf '%-*s' "${#widest}" "$info")"
     if [ "$total" -gt 0 ]; then
-      width=$(( COLS - 4 - 3 - ${#info} - 1 ))
+      width=$(( COLS - 4 - 3 - ${#widest} - 1 ))
       [ "$width" -gt 30 ] && width=30
       [ "$width" -lt 6 ] && width=6
     fi

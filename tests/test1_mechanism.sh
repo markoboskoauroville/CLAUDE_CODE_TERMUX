@@ -252,6 +252,16 @@ T="$(draw_bar 52428800 104857600 "label" 2097152 ⠹)"; COLS=120
 T2="$(draw_bar 52428800 104857600 "claude 2.1.301 for linux-arm64" 2097152 ⠹)"
 assert_contains "a wide screen keeps the label" "claude 2.1.301 for linux-arm64" "$T2"
 COLS=50
+# Recorded in the emulator, 17.10.2026: 336/272 MB; a bar that changed width
+# with the numbers; and 0 B/s for minutes after 100% while Claude Code set up.
+COLS=56
+assert_not_contains "more bytes than the total show as the total" "336/272" "$(draw_bar 352321536 285212672 x 1024 ⠹)"
+assert_contains "all arrived, still working: it says so" "setting up" "$(draw_bar 285212672 285212672 x 0 ⠹)"
+assert_not_contains "and shows no falling speed" "B/s" "$(draw_bar 285212672 285212672 x 0 ⠹)"
+barw() { printf '%s' "$1" | python3 -c 'import sys,re; t=sys.stdin.buffer.read().decode(); m=re.search(r"\[([█░]+)\]", t); print(len(m.group(1)) if m else -1)'; }
+A="$(barw "$(draw_bar 8388608 285212672 x 581632 ⠹)")"
+B="$(barw "$(draw_bar 209715200 285212672 x 2831155 ⠹)")"
+assert_eq "the bar keeps one width as the numbers change" "$A" "$B"
 TTY=0; SPIN=('|' '/' '-' '\'); BAR_ON="#"; BAR_OFF="."
 
 # --------------------------------------------------------- watch_grown -----
