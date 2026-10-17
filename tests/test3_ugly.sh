@@ -171,6 +171,35 @@ rmdir "$PREFIX/var/lib/proot-distro/containers"
 ( cd "$HOME/proj" && PATH="$LB:$PATH" bash "$PREFIX/bin/claude" )
 assert_contains "inside the home, proot-distro 4: the directory is bound" "$HOME/proj:$HOME/proj" "$(cat "$LB/args")"
 
+# =========================================== A QUIET DOWNLOAD SAYS SO ======
+# Anthropic's installer prints nothing for 8-25 minutes while it downloads;
+# on a phone that looked stuck (17.10.2026). Step 7 must print progress.
+PQ="$WORK/pq"; mkdir -p "$PQ/bin" "$WORK/pqhome"
+cat > "$PQ/bin/curl" <<'S'
+#!/bin/bash
+while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out="$2"; shift; done
+cat > "$out" <<'I'
+mkdir -p "$HOME/.local/share/claude" "$HOME/.local/bin"
+head -c 3000000 /dev/zero > "$HOME/.local/share/claude/part"; sleep 3
+printf '#!/bin/bash\necho "9.9.9 (Claude Code)"\n' > "$HOME/.local/bin/claude"; chmod +x "$HOME/.local/bin/claude"
+I
+S
+cat > "$PQ/proot-distro" <<S
+#!/bin/bash
+case "\$1" in
+  login) while [ "\$1" != "--" ]; do shift; done; shift
+         CCT_BEAT=1 HOME="$WORK/pqhome" PATH="$PQ/bin:$PL/bin:/usr/bin:/bin" exec "\$@" ;;
+esac
+exit 0
+S
+chmod +x "$PQ/proot-distro" "$PQ/bin/curl"
+fresh_env
+mkdir -p "$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs/etc"
+PATH="$PQ:$PATH" install_run --proot >/dev/null
+assert_contains "the quiet download is announced" "prints nothing until it is done" "$(cat "$WORK/out.log")"
+assert_contains "and progress is printed while it runs" "still installing Claude Code" "$(cat "$WORK/out.log")"
+assert_contains "and the step still ends with the installed version" "9.9.9 (Claude Code)" "$(cat "$WORK/out.log")"
+
 # ===================================================== STALE LIBRARY ======
 # patchelf newer than the phone's libc++: it will not even start until apt
 # upgrades libc++. The exact message from a phone, 16.10.2026.

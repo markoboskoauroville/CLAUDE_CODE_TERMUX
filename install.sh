@@ -598,7 +598,18 @@ install_proot() {
     # bash given nothing exits 0: in the cloud emulator, 16.10.2026, curl
     # could not reach downloads.claude.ai and this step still said ok.
     curl -fsSL --connect-timeout 20 --max-time 900 https://claude.ai/install.sh -o /tmp/claude-install.sh
-    bash /tmp/claude-install.sh
+    # Anthropic'"'"'s installer downloads about 230 MB and prints nothing until it
+    # is done: 8 to 25 minutes of a screen that looks frozen (cloud emulator, and
+    # a phone, 17.10.2026). Say what is on disk every so often.
+    echo "Downloading Claude Code, about 230 MB. It prints nothing until it is done; progress follows."
+    bash /tmp/claude-install.sh &
+    cct_pid=$!
+    while kill -0 "$cct_pid" 2>/dev/null; do
+      sleep "${CCT_BEAT:-20}"
+      kill -0 "$cct_pid" 2>/dev/null || break
+      echo "still installing Claude Code: $(du -sm "$HOME/.local/share/claude" 2>/dev/null | cut -f1 || echo 0) MB so far"
+    done
+    wait "$cct_pid"
     rm -f /tmp/claude-install.sh
     grep -q ".local/bin" "$HOME/.bashrc" 2>/dev/null || \
       echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$HOME/.bashrc"
