@@ -254,6 +254,21 @@ assert_contains "a wide screen keeps the label" "claude 2.1.301 for linux-arm64"
 COLS=50
 TTY=0; SPIN=('|' '/' '-' '\'); BAR_ON="#"; BAR_OFF="."
 
+# --------------------------------------------------------- watch_grown -----
+# The emulator, 17.10.2026: an old 256 MB build sat in versions/ while the new
+# download went to downloads/; the bar must show the new bytes, from zero.
+WD="$(mktemp -d)"; mkdir -p "$WD/versions" "$WD/downloads"
+head -c 5242880 /dev/zero > "$WD/versions/old"
+watch_start "$WD/downloads $WD/versions"
+assert_eq "nothing new yet reads 0" "0" "$(watch_grown "$WD/downloads $WD/versions")"
+head -c 2097152 /dev/zero > "$WD/downloads/new"
+G="$(watch_grown "$WD/downloads $WD/versions")"
+assert_ok "the new download counts from zero, the old build not at all ($G)" test "$G" -ge 2097152 -a "$G" -lt 3145728
+cp "$WD/downloads/new" "$WD/versions/new"
+G="$(watch_grown "$WD/downloads $WD/versions")"
+assert_ok "the same bytes copied on are not counted twice ($G)" test "$G" -lt 3145728
+rm -rf "$WD"
+
 # --------------------------------------------------------- choose_mode -----
 # With nothing to ask on, the default is proot: the path proven on a phone.
 # native installed and then segfaulted on a Nothing Phone (2a), 16.10.2026.

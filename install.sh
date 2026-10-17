@@ -110,7 +110,21 @@ fmt_eta() {
   else printf '%d:%02d' $(( t / 60 )) $(( t % 60 )); fi
 }
 # Bytes under a path, 0 when it is not there yet.
-bytes_in() { du -sb "$1" 2>/dev/null | cut -f1 | grep -E '^[0-9]+$' || echo 0; }
+bytes_in() { local b; b=$(du -sb "$1" 2>/dev/null | cut -f1); [[ "$b" =~ ^[0-9]+$ ]] && echo "$b" || echo 0; }
+# What arrived since watch_start, for one path or several (space-separated):
+# the largest gain, not the sum. Anthropic's installer downloads into
+# ~/.claude/downloads and then copies into ~/.local/share/claude/versions, and
+# the same bytes must not count twice; an old build already there must not
+# count at all.
+declare -A WATCH_BASE
+watch_start() { local p; WATCH_BASE=(); for p in $1; do WATCH_BASE[$p]=$(bytes_in "$p"); done; }
+watch_grown() {
+  local p m=0 d
+  for p in $1; do
+    d=$(( $(bytes_in "$p") - ${WATCH_BASE[$p]:-0} )); [ "$d" -gt "$m" ] && m=$d
+  done
+  echo "$m"
+}
 
 # draw_bar NOW TOTAL LABEL [BYTES_PER_SECOND] [SPINNER]
 # Midnight Commander's copy dialog in one line:
@@ -199,7 +213,7 @@ run() {
   local t0 rc pid n=0 total_lines i=0 base=0 now=0 last_beat lines
   local watch="${RUN_WATCH:-}" want="${RUN_TOTAL:-0}"
   t0=$(date +%s); last_beat=$t0
-  [ -n "$watch" ] && base=$(bytes_in "$watch")
+  [ -n "$watch" ] && watch_start "$watch"
   rate_reset
   "$@" </dev/null >"$RUN_LOG" 2>&1 &
   pid=$!
@@ -216,7 +230,7 @@ run() {
   while kill -0 "$pid" 2>/dev/null; do
     _run_flush
     if [ -n "$watch" ]; then
-      now=$(( $(bytes_in "$watch") - base )); [ "$now" -lt 0 ] && now=0
+      now=$(watch_grown "$watch")
       rate_sample "$now"
     fi
     if [ "$TTY" = "1" ]; then
@@ -753,8 +767,11 @@ install_proot() {
     [[ "$cc_total" =~ ^[0-9]+$ ]] || cc_total=0
     [ "$cc_total" -gt 0 ] && info "Claude Code $cc_ver, $(( cc_total / 1048576 )) MB for $plat"
   fi
-  mkdir -p "$HOME/.local/share/claude"
-  RUN_WATCH="$HOME/.local/share/claude" RUN_TOTAL="$cc_total" \
+  mkdir -p "$HOME/.local/share/claude/versions" "$HOME/.claude/downloads"
+  # Two places fill up: the bootstrap's download, then the build it installs
+  # (which it may fetch again, newer, by itself). Watching only one showed 0 MB
+  # for 30 minutes in the emulator (17.10.2026).
+  RUN_WATCH="$HOME/.claude/downloads $HOME/.local/share/claude/versions" RUN_TOTAL="$cc_total" \
   run "claude install inside $DISTRO" proot-distro login "$DISTRO" --termux-home -- bash -lc '
     set -eo pipefail
     export DEBIAN_FRONTEND=noninteractive
